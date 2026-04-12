@@ -1,5 +1,7 @@
 ﻿//主画板
 var Game = function (width, height) {
+    var gameRoot = document.getElementById("game-root");
+
     this.Height = height;
     this.Width = width;
     this.gamecanvas = document.createElement("canvas");
@@ -9,7 +11,13 @@ var Game = function (width, height) {
     this.gamecanvas.setAttribute("height", this.Height);
     this.gamecanvas.setAttribute("width", this.Width);
 
-    document.body.appendChild(this.gamecanvas);
+    if (gameRoot) {
+        gameRoot.innerHTML = "";
+        gameRoot.appendChild(this.gamecanvas);
+    }
+    else {
+        document.body.appendChild(this.gamecanvas);
+    }
 
     this.context = document.getElementById(this.gamecanvas.id).getContext("2d");
 
@@ -203,6 +211,7 @@ var Sound = function (url) {
     this.Play = function () {
         this.IsPlaying = true;
         var t = this;
+        var playPromise;
         if (this.Loop) {
             this.Audio.loop = 'loop';
             this.Audio.addEventListener('ended', function () {
@@ -214,7 +223,10 @@ var Sound = function (url) {
                 t.IsPlaying = false;
             }, false);
         }
-        this.Audio.play();
+        playPromise = this.Audio.play();
+        if (playPromise && typeof playPromise.catch === "function") {
+            playPromise.catch(function () {});
+        }
     }
 
     //暂停

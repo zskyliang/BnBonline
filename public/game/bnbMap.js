@@ -71,6 +71,18 @@ var townBarrierMap1 = [
                         [ 3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3 ]
                      ];
 
+function ReplaceTreeAndHouseWithBoxes() {
+    var boxReplacements = {4: true, 5: true, 6: true, 7: true};
+
+    for (var y = 0; y < townBarrierMap.length; y++) {
+        for (var x = 0; x < townBarrierMap[y].length; x++) {
+            if (boxReplacements[townBarrierMap[y][x]]) {
+                townBarrierMap[y][x] = 3;
+            }
+        }
+    }
+}
+
 //所处的地图区块
 function FindMapID(point) {
     point.X = point.X - 20;

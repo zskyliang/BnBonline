@@ -118,7 +118,7 @@ var Barrier = {
             if ((b.No > 0 && b.No < 3) || b.No > 100) {
                 b.Object.Dispose();
                 townBarrierMap[y][x] = 0;
-                b = null;
+                Barrier.Storage[y][x] = null;
             }
             else if (b.No == 3) {
                 townBarrierMap[y][x] = CreateRandomGift(); //GiftStorage[y][x];
@@ -127,6 +127,77 @@ var Barrier = {
                 Barrier.Create(x, y, townBarrierMap[y][x]);
             }
         }
+    },
+
+    CanPushBoxTo: function (x, y) {
+        if (x < 0 || y < 0 || y >= townBarrierMap.length || x >= townBarrierMap[0].length) {
+            return false;
+        }
+        if (townBarrierMap[y][x] !== 0) {
+            return false;
+        }
+
+        for (var i = 0; i < RoleStorage.length; i++) {
+            var role = RoleStorage[i];
+            if (!role || role.IsDeath) {
+                continue;
+            }
+            var map = role.CurrentMapID();
+            if (map && map.X === x && map.Y === y) {
+                return false;
+            }
+        }
+
+        return true;
+    },
+
+    PushBox: function (fromX, fromY, direction) {
+        var targetX = fromX;
+        var targetY = fromY;
+        var box;
+
+        if (townBarrierMap[fromY][fromX] !== 3) {
+            return false;
+        }
+
+        switch (direction) {
+            case Direction.Up:
+                targetY--;
+                break;
+            case Direction.Down:
+                targetY++;
+                break;
+            case Direction.Left:
+                targetX--;
+                break;
+            case Direction.Right:
+                targetX++;
+                break;
+            default:
+                return false;
+        }
+
+        if (!Barrier.CanPushBoxTo(targetX, targetY)) {
+            return false;
+        }
+
+        box = Barrier.Storage[fromY] ? Barrier.Storage[fromY][fromX] : null;
+        if (box && box.Object) {
+            box.Object.Dispose();
+        }
+
+        townBarrierMap[fromY][fromX] = 0;
+        townBarrierMap[targetY][targetX] = 3;
+
+        if (Barrier.Storage[fromY]) {
+            Barrier.Storage[fromY][fromX] = null;
+        }
+        if (!Barrier.Storage[targetY]) {
+            Barrier.Storage[targetY] = [];
+        }
+        Barrier.Create(targetX, targetY, 3);
+
+        return true;
     }
 }
 
@@ -142,10 +213,9 @@ function DrawBarrierMap(){
     }
 }
 
-var GiftSeed = 0.4;
+var NormalGiftPool = [101, 102, 103, 104, 105, 106];
+
 function CreateRandomGift() {
-    //return 100 + Math.floor(Math.random() * 9 + 1);
-    var num = GiftSeed * 23 - 6.234;
-    GiftSeed = num - Math.floor(num);
-    return 100 + Math.floor(GiftSeed * 9 + 1);
+    var index = Math.floor(Math.random() * NormalGiftPool.length);
+    return NormalGiftPool[index];
 }

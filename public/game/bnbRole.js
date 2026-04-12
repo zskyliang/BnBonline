@@ -12,10 +12,10 @@ var Direction = {
 var RoleConstant = {
     MinMoveStep: 2,
     //最大速度
-    MaxMoveStep: 8,
+    MaxMoveStep: 4,
 
     //泡泡最大强度
-    MaxPaopaoStrong: 15
+    MaxPaopaoStrong: 10
 }
 
 var RoleStorage = [];
@@ -33,6 +33,9 @@ var Role = function(number) {
 
     //是否死亡
     this.IsDeath = false;
+
+    //是否免疫泡泡爆炸
+    this.IsBombImmune = false;
 
     //偏移
     this.Offset = new Size(0, 0);
@@ -67,6 +70,29 @@ var Role = function(number) {
     //是否在泡泡中
     this.IsInPaopao = false;
 
+    //坐骑被炸掉后的短暂无敌（毫秒时间戳）
+    this.DismountProtectionUntil = 0;
+
+    //复活无敌时间（毫秒时间戳）
+    this.ExplosionImmuneUntil = 0;
+
+    //死亡前速度（用于复活恢复）
+    this.PreDeathMoveStep = null;
+
+    //最近一次击杀者
+    this.LastAttacker = null;
+
+    //半身接触爆炸水柱的时间记录（毫秒时间戳），任意两次半身命中在窗口内即致死
+    this.LastHalfHitTime = 0;
+
+    //困泡状态中的大泡泡对象
+    this.TrapBubbleObject = null;
+
+    //困泡状态动画、接触检测、死亡倒计时句柄
+    this.TrapFloatInterval = 0;
+    this.TrapTouchInterval = 0;
+    this.TrapDieTimeout = 0;
+
     //坐骑对象
     this.RideHorseObject = null;
 
@@ -84,8 +110,15 @@ var Role = function(number) {
 
     //设置初始速度
     this.SetRawSpeed = function(speed) {
-        this.RawSpeed = speed;
-        this.MoveStep = speed;
+        var limitedSpeed = speed;
+        if (limitedSpeed > RoleConstant.MaxMoveStep) {
+            limitedSpeed = RoleConstant.MaxMoveStep;
+        }
+        if (limitedSpeed < 0) {
+            limitedSpeed = 0;
+        }
+        this.RawSpeed = limitedSpeed;
+        this.MoveStep = limitedSpeed;
     }
 
     //角色坐标重新设置
@@ -221,6 +254,9 @@ var Role = function(number) {
         if (this.MoveStep > RoleConstant.MaxMoveStep) {
             this.MoveStep = RoleConstant.MaxMoveStep;
         }
+        if (this.MoveStep < 0) {
+            this.MoveStep = 0;
+        }
     }
 
     //增加泡泡强度
@@ -273,6 +309,23 @@ var Role = function(number) {
             else {
                 result = townBarrierMap[nextmap.Y][nextmap.X] <= 0 || townBarrierMap[nextmap.Y][nextmap.X] > 100;
             }
+
+            // 推箱子：前方是箱子且前前方无障碍时，允许推动
+            if (!result && this.MoveHorse != MoveHorseObject.UFO && townBarrierMap[nextmap.Y][nextmap.X] == 3) {
+                var mapPoint = this.MapPoint();
+                var aligned = true;
+                if (this.Direction == Direction.Up || this.Direction == Direction.Down) {
+                    aligned = Math.abs((mapPoint.X % 40) - 20) <= 2;
+                }
+                else if (this.Direction == Direction.Left || this.Direction == Direction.Right) {
+                    aligned = Math.abs((mapPoint.Y % 40) - 20) <= 2;
+                }
+
+                if (aligned) {
+                    result = Barrier.PushBox(nextmap.X, nextmap.Y, this.Direction);
+                }
+            }
+
             if (result) {
                 var zindex = nextmap.Y;
                 //zindex += nextmap.X > 0 ? 1 : 0;
@@ -408,7 +461,18 @@ var Role = function(number) {
                 break;
         }
         var lefttopmapID = GetMapIDByRelativePoint(newPoint.X, newPoint.Y);
-        if (lefttopmapID !=null && townBarrierMap[lefttopmapID.Y][lefttopmapID.X] > 0 && townBarrierMap[lefttopmapID.Y][lefttopmapID.X] <= 100) {
+        if (lefttopmapID != null) {
+            var currentMapID = this.CurrentMapID();
+            var unitNo = townBarrierMap[lefttopmapID.Y][lefttopmapID.X];
+            var isCurrentBubbleTile = unitNo == 100
+                && currentMapID != null
+                && currentMapID.X == lefttopmapID.X
+                && currentMapID.Y == lefttopmapID.Y;
+
+            if (!(unitNo > 0 && (unitNo < 100 || (unitNo == 100 && !isCurrentBubbleTile)))) {
+                return;
+            }
+
             if (isxline) {
                 var xunitNumber = parseInt(mappoint.X / 40, 10);
                 this.SetPosition(xunitNumber * 40 + 20, mappoint.Y);
@@ -447,10 +511,20 @@ Role.prototype.PaoPao = function() {
 }
 
 //角色被炸到
-Role.prototype.Bomb = function(){
+Role.prototype.Bomb = function(attacker){
+    if (this.DismountProtectionUntil > Date.now()) {
+        return;
+    }
+    if (this.ExplosionImmuneUntil > Date.now()) {
+        return;
+    }
+
     if(!this.IsDeath && !this.IsInPaopao){
+        if (attacker != null) {
+            this.LastAttacker = attacker;
+        }
         if(this.MoveHorse != MoveHorseObject.None){
-            this.OutRide();
+            this.OutRide(true);
         }
         else{
             this.InPaoPao();
@@ -458,9 +532,148 @@ Role.prototype.Bomb = function(){
     }
 }
 
+Role.prototype.IsExplosionHit = function(mapid) {
+    var mapXY = GetMapPointXY(mapid);
+    var blastCenterX = mapXY.X * 40 + 20;
+    var blastCenterY = mapXY.Y * 40 + 20;
+    var roleCenter = this.MapPoint();
+    var hitCore = 9;
+    var axisBand = 6;
+    var halfReach = 24;
+    var halfWindowMs = 300;
+    var dx = blastCenterX - roleCenter.X;
+    var dy = blastCenterY - roleCenter.Y;
+    var adx = Math.abs(dx);
+    var ady = Math.abs(dy);
+    var now = Date.now();
+
+    // 核心命中：角色中心与爆炸中心足够近，直接致死
+    if (adx <= hitCore && ady <= hitCore) {
+        this.LastHalfHitTime = 0;
+        return true;
+    }
+
+    // 过期的半身命中记录清零
+    if (this.LastHalfHitTime > 0 && now - this.LastHalfHitTime > halfWindowMs) {
+        this.LastHalfHitTime = 0;
+    }
+
+    var isHalfHit = false;
+
+    // 横半身（纵轴：上下方向）
+    if (adx <= axisBand && ady > hitCore && ady <= halfReach) {
+        isHalfHit = true;
+    }
+
+    // 竖半身（横轴：左右方向）
+    if (ady <= axisBand && adx > hitCore && adx <= halfReach) {
+        isHalfHit = true;
+    }
+
+    if (isHalfHit) {
+        if (this.LastHalfHitTime > 0) {
+            // 两次半身命中在窗口内，致死
+            this.LastHalfHitTime = 0;
+            return true;
+        }
+        this.LastHalfHitTime = now;
+    }
+
+    return false;
+}
+
+Role.prototype.IsFriendlyWith = function(otherRole) {
+    return otherRole != null && this.RoleNumber == otherRole.RoleNumber;
+}
+
+Role.prototype.IsTouchingRole = function(otherRole) {
+    var selfCenter = this.CenterPoint();
+    var otherCenter = otherRole.CenterPoint();
+    return Math.abs(selfCenter.X - otherCenter.X) <= 24 && Math.abs(selfCenter.Y - otherCenter.Y) <= 24;
+}
+
+Role.prototype.ClearTrapStateTimers = function() {
+    if (this.TrapFloatInterval) {
+        clearInterval(this.TrapFloatInterval);
+        this.TrapFloatInterval = 0;
+    }
+    if (this.TrapTouchInterval) {
+        clearInterval(this.TrapTouchInterval);
+        this.TrapTouchInterval = 0;
+    }
+    if (this.TrapDieTimeout) {
+        clearTimeout(this.TrapDieTimeout);
+        this.TrapDieTimeout = 0;
+    }
+}
+
+Role.prototype.ReleaseFromPaoPao = function(rescuerRole) {
+    var restoreMoveStep;
+
+    if (!this.IsInPaopao || this.IsDeath) {
+        return;
+    }
+
+    this.ClearTrapStateTimers();
+    if (this.TrapBubbleObject != null) {
+        this.TrapBubbleObject.Dispose();
+        this.TrapBubbleObject = null;
+    }
+
+    this.IsInPaopao = false;
+    restoreMoveStep = this.PreDeathMoveStep || this.RawSpeed;
+    if (restoreMoveStep > RoleConstant.MaxMoveStep) {
+        restoreMoveStep = RoleConstant.MaxMoveStep;
+    }
+    this.MoveStep = restoreMoveStep;
+
+    this.Object.SetImage(resPrefix + "Pic/Role" + this.RoleNumber + ".png");
+    if (this.RoleNumber == 1) {
+        this.Object.Size = new Size(48, 64);
+        this.Offset = new Size(0, 12);
+    }
+    else {
+        this.Object.Size = new Size(56, 67);
+        this.Offset = new Size(0, 17);
+    }
+    this.Object.StartPoint = new Point(0, this.Object.Size.Height * this.Direction);
+
+    if (rescuerRole != null) {
+        SystemSound.Play(SoundType.Save, false);
+    }
+}
+
+Role.prototype.ResolveTrapTouchResult = function() {
+    for (var i = 0; i < RoleStorage.length; i++) {
+        var otherRole = RoleStorage[i];
+        var trapBubble;
+
+        if (!otherRole || otherRole === this || otherRole.IsDeath || otherRole.IsInPaopao) {
+            continue;
+        }
+        if (!this.IsTouchingRole(otherRole)) {
+            continue;
+        }
+
+        if (this.IsFriendlyWith(otherRole)) {
+            this.ReleaseFromPaoPao(otherRole);
+        }
+        else {
+            this.LastAttacker = otherRole;
+            this.ClearTrapStateTimers();
+            trapBubble = this.TrapBubbleObject;
+            this.TrapBubbleObject = null;
+            this.Die(trapBubble);
+        }
+        return;
+    }
+}
+
 //进入了泡泡
 Role.prototype.InPaoPao = function() {
     if(!this.IsInPaopao){
+        this.ClearTrapStateTimers();
+        this.PreDeathMoveStep = this.MoveStep;
         this.MoveStep = 0.1;
         this.IsInPaopao = true;
 
@@ -470,6 +683,7 @@ Role.prototype.InPaoPao = function() {
 
         var paopaoimage = resPrefix + "Pic/BigPopo.png";
         var bigPaopao = new Bitmap(paopaoimage);
+        this.TrapBubbleObject = bigPaopao;
         bigPaopao.Size = new Size(72, 72);
         var centerpoint = this.CenterPoint();
         bigPaopao.Position = new Point(centerpoint.X - bigPaopao.Size.Width / 2, centerpoint.Y - bigPaopao.Size.Height / 2 - this.Offset.Height);
@@ -477,14 +691,14 @@ Role.prototype.InPaoPao = function() {
 
         var picnumber = 0;
         var t = this;
-        var bigpaoInterval = setInterval(function() {
+        this.TrapFloatInterval = setInterval(function() {
             if (picnumber < 3) {
                 picnumber++;
                 bigPaopao.StartPoint = new Point(72 * picnumber, 0);
             }
             centerpoint = t.CenterPoint();
             if (t.Object.StartPoint.X == 0) {
-                t.Object.StartPoint.X = t.Object.Width;
+                t.Object.StartPoint.X = t.Object.Size.Width;
             }
             else {
                 t.Object.StartPoint.X = 0;
@@ -493,17 +707,25 @@ Role.prototype.InPaoPao = function() {
             bigPaopao.ZIndex = t.Object.ZIndex + 1;
         }, 100);
 
+        this.TrapTouchInterval = setInterval(function() {
+            if (!t.IsDeath && t.IsInPaopao) {
+                t.ResolveTrapTouchResult();
+            }
+        }, 50);
+
         //死亡倒计时
-        var dietimeout = setTimeout(function() {
-            clearInterval(bigpaoInterval);
+        this.TrapDieTimeout = setTimeout(function() {
+            t.ClearTrapStateTimers();
+            t.TrapBubbleObject = null;
             t.Die(bigPaopao);
-            clearTimeout(dietimeout);
         }, 3000);
     }
 }
 
 //角色死亡
 Role.prototype.Die = function (bigPaopao) {
+    this.ClearTrapStateTimers();
+    this.TrapBubbleObject = null;
     this.Object.SetImage(resPrefix + "Pic/Role" + this.RoleNumber + "Die.png");
     this.Object.Size = this.DieSize;
 
@@ -512,11 +734,13 @@ Role.prototype.Die = function (bigPaopao) {
     var dieinterval = setInterval(function () {
         if (dienumber < 11) {
             t.Object.StartPoint.X = t.Object.Size.Width * dienumber;
-            if (dienumber + 3 < 8) {
-                bigPaopao.StartPoint.X = 72 * (dienumber + 3);
-            }
-            else {
-                bigPaopao.Dispose();
+            if (bigPaopao != null) {
+                if (dienumber + 3 < 8) {
+                    bigPaopao.StartPoint.X = 72 * (dienumber + 3);
+                }
+                else {
+                    bigPaopao.Dispose();
+                }
             }
             dienumber++;
         }
@@ -532,7 +756,7 @@ Role.prototype.Die = function (bigPaopao) {
         SystemSound.Play(SoundType.Die, false);
     }
     this.IsDeath = true;
-    this.OnDeath();
+    this.OnDeath(this, this.LastAttacker);
 }
 // 死亡时回调
 Role.prototype.OnDeath = function () {
@@ -575,16 +799,69 @@ Role.prototype.Ride = function() {
 }
 
 //坐骑被炸死
-Role.prototype.OutRide = function(){
+Role.prototype.OutRide = function(isFromBomb){
     if(this.MoveHorse !=  MoveHorseObject.None){
         this.Object.Size = new Size(this.RawSize.Width, this.RawSize.Height);
         this.Offset = new Size(this.RawOffset.Width, this.RawOffset.Height);
         this.MoveHorse =  MoveHorseObject.None;
-        this.MoveStep = this.RawSpeed;
+        this.MoveStep = this.RawSpeed > RoleConstant.MaxMoveStep ? RoleConstant.MaxMoveStep : this.RawSpeed;
         this.Object.SetImage(resPrefix + "Pic/Role" + this.RoleNumber + ".png");
+        if (this.RideHorseObject != null) {
+            this.RideHorseObject.Die();
+            this.RideHorseObject = null;
+        }
+        if (isFromBomb) {
+            this.DismountProtectionUntil = Date.now() + 700;
+        }
+    }
+}
+
+Role.prototype.RespawnAt = function(x, y, invincibleMs) {
+    var restoreMoveStep = this.PreDeathMoveStep || this.RawSpeed;
+    if (restoreMoveStep > RoleConstant.MaxMoveStep) {
+        restoreMoveStep = RoleConstant.MaxMoveStep;
+    }
+
+    this.Stop();
+    clearInterval(this.movetoInterval);
+    this.ClearTrapStateTimers();
+    if (this.TrapBubbleObject != null) {
+        this.TrapBubbleObject.Dispose();
+        this.TrapBubbleObject = null;
+    }
+
+    if (this.RideHorseObject != null) {
         this.RideHorseObject.Die();
         this.RideHorseObject = null;
     }
+
+    this.IsDeath = false;
+    this.IsInPaopao = false;
+    this.LastAttacker = null;
+    this.DismountProtectionUntil = 0;
+    this.ExplosionImmuneUntil = Date.now() + (invincibleMs || 0);
+    this.LastHalfHitTime = 0;
+
+    this.Object.Visible = true;
+    if (Game.SpriteArray.indexOf(this.Object) === -1) {
+        Game.SpriteArray.push(this.Object);
+    }
+    this.Object.SetImage(resPrefix + "Pic/Role" + this.RoleNumber + ".png");
+
+    if (this.RoleNumber == 1) {
+        this.Object.Size = new Size(48, 64);
+        this.Offset = new Size(0, 12);
+    }
+    else {
+        this.Object.Size = new Size(56, 67);
+        this.Offset = new Size(0, 17);
+    }
+
+    this.MoveHorse = MoveHorseObject.None;
+    this.MoveStep = restoreMoveStep;
+    this.Direction = Direction.Down;
+    this.Object.StartPoint = new Point(0, this.Object.Size.Height * this.Direction);
+    this.SetToMap(x, y);
 }
 
 this.movetoInterval = 0;

@@ -49,12 +49,12 @@
 		var maxX = map.length;
 		var maxY = map[0].length;
 		//if(t>=0 && l>=0 && (map[t][l]==0 || map[t][l]>100) && (map[t][y]==0 || map[t][y]>100) && (map[x][l]==0 || map[x][l]>100)) this.chkPoint(_node,x,y,g,t,l,x1,y1);//1
-		if(t>=0 && map[t][y]==0) this.chkPoint(_node,x,y,g,x-1,y,x1,y1);//2
+		if(t>=0 && (map[t][y]==0 || map[t][y]>100)) this.chkPoint(_node,x,y,g,x-1,y,x1,y1);//2
 		//if(t>=0 && r<maxY && (map[t][r]==0||map[t][r]>100) && (map[t][y]==0 || map[t][y]>100) && (map[x][r]==0 || map[x][r]>100)) this.chkPoint(_node,x,y,g,t,r,x1,y1);//3
 		if(l>=0 && (map[x][l]==0 || map[x][l]>100)) this.chkPoint(_node,x,y,g,x,y-1,x1,y1);//4
 		if(r<maxY && (map[x][r]==0 || map[x][r]>100)) this.chkPoint(_node,x,y,g,x,y+1,x1,y1);//6
 		//if(b<maxX && l>=0 && (map[b][l]==0 || map[b][l]>100) && (map[x][l]==0 || map[x][l]>100) && (map[b][y]==0||map[b][y]>100)) this.chkPoint(_node,x,y,g,b,l,x1,y1);//7
-		if(b<maxX && map[b][y]==0) this.chkPoint(_node,x,y,g,x+1,y,x1,y1);//8
+		if(b<maxX && (map[b][y]==0 || map[b][y]>100)) this.chkPoint(_node,x,y,g,x+1,y,x1,y1);//8
 		//if(b<maxX && r<maxY && (map[b][r]==0 || map[b][r]>100) && (map[b][y]==0||map[b][y]>100) && (map[x][r]==0||map[x][r]>100)) this.chkPoint(_node,x,y,g,b,r,x1,y1);//9
 	}
 	
