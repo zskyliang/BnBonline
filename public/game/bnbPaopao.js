@@ -23,6 +23,88 @@ var PaopaoEventIdSeed = 0;
 var ExplosionZoneIdSeed = 0;
 var BNBThreatSceneRevision = 0;
 var BNBLastBubbleSpawnEvent = null;
+var ExplosionSafetyDebugModeCache = null;
+
+function ParseExplosionDebugBool(raw) {
+    if (raw == null) {
+        return null;
+    }
+    if (typeof raw === "boolean") {
+        return raw;
+    }
+    raw = String(raw).toLowerCase();
+    if (raw === "1" || raw === "true" || raw === "yes" || raw === "on") {
+        return true;
+    }
+    if (raw === "0" || raw === "false" || raw === "no" || raw === "off") {
+        return false;
+    }
+    return null;
+}
+
+function ResolveExplosionSafetyDebugMode() {
+    var query;
+    var trainMode = false;
+    var battleMode = false;
+    var panelEnabled;
+    var consoleEnabled;
+    var panelQuery;
+    var consoleQuery;
+    var panelFlag;
+    var consoleFlag;
+    if (ExplosionSafetyDebugModeCache) {
+        return ExplosionSafetyDebugModeCache;
+    }
+    if (typeof window === "undefined" || !window.location) {
+        ExplosionSafetyDebugModeCache = { panel: false, console: false };
+        return ExplosionSafetyDebugModeCache;
+    }
+    query = new URLSearchParams(window.location.search || "");
+    trainMode = query.get("train") === "1";
+    battleMode = query.get("mode") === "battle";
+    panelQuery = ParseExplosionDebugBool(query.get("safety_debug"));
+    consoleQuery = ParseExplosionDebugBool(query.get("safety_debug_console"));
+    panelFlag = ParseExplosionDebugBool(window.BNBEnableExplosionSafetyDebugPanel);
+    if (panelFlag == null) {
+        panelFlag = ParseExplosionDebugBool(window.BNBEnableExplosionSafetyDebug);
+    }
+    consoleFlag = ParseExplosionDebugBool(window.BNBEnableExplosionSafetyConsole);
+
+    panelEnabled = panelQuery;
+    if (panelEnabled == null) {
+        panelEnabled = panelFlag;
+    }
+    if (panelEnabled == null) {
+        panelEnabled = trainMode && !battleMode;
+    }
+
+    consoleEnabled = consoleQuery;
+    if (consoleEnabled == null) {
+        consoleEnabled = consoleFlag;
+    }
+    if (consoleEnabled == null) {
+        consoleEnabled = false;
+    }
+
+    ExplosionSafetyDebugModeCache = {
+        panel: !!panelEnabled,
+        console: !!consoleEnabled
+    };
+    return ExplosionSafetyDebugModeCache;
+}
+
+function IsExplosionSafetyDebugPanelEnabled() {
+    return ResolveExplosionSafetyDebugMode().panel;
+}
+
+function IsExplosionSafetyDebugConsoleEnabled() {
+    return ResolveExplosionSafetyDebugMode().console;
+}
+
+function ShouldOutputExplosionSafetyDebug() {
+    var mode = ResolveExplosionSafetyDebugMode();
+    return mode.panel || mode.console;
+}
 
 function PublishThreatSceneMeta() {
     if (typeof window === "undefined") {
@@ -722,8 +804,14 @@ function PushExplosionSafetyDebugLog(message) {
     var li;
     var time;
     var text;
+    var listChildren;
+    var mode;
 
     if (!message) {
+        return;
+    }
+    mode = ResolveExplosionSafetyDebugMode();
+    if (!mode.panel && !mode.console) {
         return;
     }
 
@@ -734,10 +822,13 @@ function PushExplosionSafetyDebugLog(message) {
         ExplosionSafetyDebugLogs = ExplosionSafetyDebugLogs.slice(ExplosionSafetyDebugLogs.length - ExplosionSafetyDebugMaxLogs);
     }
 
-    if (typeof console !== "undefined" && typeof console.log === "function") {
+    if (mode.console && typeof console !== "undefined" && typeof console.log === "function") {
         console.log("[安全判定] " + text);
     }
 
+    if (!mode.panel) {
+        return;
+    }
     panel = EnsureExplosionSafetyDebugPanel();
     if (!panel) {
         return;
@@ -752,6 +843,10 @@ function PushExplosionSafetyDebugLog(message) {
     li.textContent = text;
     // 倒序：最新日志放在最上面
     list.insertBefore(li, list.firstChild);
+    listChildren = list.children;
+    while (listChildren.length > ExplosionSafetyDebugMaxLogs) {
+        list.removeChild(list.lastChild);
+    }
     list.scrollTop = 0;
 }
 
@@ -775,6 +870,9 @@ function HasAnyPaopaoOnMap() {
 
 function EmitRoleSafetyLog(role, index, key, message) {
     if (!role) {
+        return;
+    }
+    if (!ShouldOutputExplosionSafetyDebug()) {
         return;
     }
     if (role.__ExplosionSafetyDebugKey === key) {
@@ -1147,7 +1245,10 @@ function ResolveExplosion(allmapidarray, centerMapId) {
 function FindPaopaoBombXY(mapid, strong){
     var centerX = mapid % 15;
     var centerY = parseInt(mapid / 15, 10);
-    var baseStrong = Math.min(parseInt(strong, 10) || 0, 10);
+    var maxStrongCap = (typeof RoleConstant !== "undefined" && typeof RoleConstant.MaxPaopaoStrong === "number")
+        ? RoleConstant.MaxPaopaoStrong
+        : 10;
+    var baseStrong = Math.min(parseInt(strong, 10) || 0, maxStrongCap);
     //X轴方向
     var xmaparray = [];
     //Y轴方向

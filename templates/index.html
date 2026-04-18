@@ -144,12 +144,28 @@
             <h2 class="match-title">本局信息</h2>
             <div id="round-timer" class="round-timer">05:00</div>
             <div class="config-block">
-                <label for="max-move-step-input" class="config-label">人物最大速度</label>
+                <label for="max-move-step-input" class="config-label">人物最大速度 (px/s)</label>
                 <div class="config-row">
-                    <input id="max-move-step-input" class="config-input" type="number" min="2" max="12" step="1" value="4">
+                    <input id="max-move-step-input" class="config-input" type="number" min="50" max="1000" step="25" value="300">
                     <button id="apply-max-move-step" class="config-button" type="button">应用</button>
                 </div>
-                <div id="max-move-step-hint" class="config-hint">当前上限：4</div>
+                <div id="max-move-step-hint" class="config-hint">当前上限：300 px/s</div>
+            </div>
+            <div class="config-block">
+                <label for="max-bubble-count-input" class="config-label">人物最大水泡数</label>
+                <div class="config-row">
+                    <input id="max-bubble-count-input" class="config-input" type="number" min="2" max="20" step="1" value="8">
+                    <button id="apply-max-bubble-count" class="config-button" type="button">应用</button>
+                </div>
+                <div id="max-bubble-count-hint" class="config-hint">当前上限：8</div>
+            </div>
+            <div class="config-block">
+                <label for="max-power-input" class="config-label">人物最大威力 (覆盖格)</label>
+                <div class="config-row">
+                    <input id="max-power-input" class="config-input" type="number" min="2" max="20" step="1" value="10">
+                    <button id="apply-max-power" class="config-button" type="button">应用</button>
+                </div>
+                <div id="max-power-hint" class="config-hint">当前上限：10 格</div>
             </div>
             <div class="config-block">
                 <label for="bubble-skin-select" class="config-label">玩家水泡皮肤</label>

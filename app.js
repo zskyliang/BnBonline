@@ -13,6 +13,7 @@ app.engine('html', swig.renderFile);
 app.set('view engine', 'html');
 app.set('views', __dirname + '/templates');
 app.use(express.static('public'));
+app.use('/output', express.static(path.join(__dirname, 'output')));
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({     // to support URL-encoded bodies
     extended: true
@@ -176,9 +177,11 @@ io.on('connection', function (socket) {
 
 });
 
-server.listen(4000, function(){
-    var host = server.address().address;
-    var port = server.address().port;
+var port = parseInt(process.env.PORT, 10) || 4000;
 
-    console.log('App listening at http://%s:%s', host, port);
+server.listen(port, function(){
+    var host = server.address().address;
+    var runningPort = server.address().port;
+
+    console.log('App listening at http://%s:%s', host, runningPort);
 });

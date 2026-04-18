@@ -131,20 +131,18 @@ var Game = function (width, height) {
             //绘制屏幕
             t.context.save();
             t.context.clearRect(0, 0, t.Width, t.Height);
-            var diplayedcount = 0;
-            var currentZIndex = 0;
-            while (diplayedcount < Game.SpriteArray.length) {
-                for (var i = 0; i < Game.SpriteArray.length; i++) {
-                    var o = Game.SpriteArray[i];
-                    if (!o) {
-                        continue;
-                    }
-                    if (o.ZIndex == currentZIndex) {
-                        o.Show(t.context);
-                        diplayedcount++;
-                    }
+            // 直接按层级排序渲染，避免负层级/异常层级导致循环无法收敛
+            var drawList = Game.SpriteArray.slice(0);
+            drawList.sort(function (a, b) {
+                var za = (a && typeof a.ZIndex === "number" && !isNaN(a.ZIndex)) ? a.ZIndex : 0;
+                var zb = (b && typeof b.ZIndex === "number" && !isNaN(b.ZIndex)) ? b.ZIndex : 0;
+                return za - zb;
+            });
+            for (var i = 0; i < drawList.length; i++) {
+                var o = drawList[i];
+                if (o) {
+                    o.Show(t.context);
                 }
-                currentZIndex++;
             }
             t.context.restore();
 

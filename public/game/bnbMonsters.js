@@ -6,7 +6,9 @@ var MonsterCount = 3;
 var MonsterThinkInterval = 150;
 var MonsterTrainingThinkInterval = 33;
 var MonsterStorage = [];
-var MonsterMaxPaopaoLength = 5;
+var MonsterMaxPaopaoLength = typeof RoleBalanceConfig !== "undefined"
+    ? RoleBalanceConfig.MaxBubbleCount
+    : 8;
 var AIBootcampRounds = 100;
 var DIRS = [{dx: 0, dy: -1}, {dx: 0, dy: 1}, {dx: -1, dy: 0}, {dx: 1, dy: 0}];
 var AIDodgePolicyStorageKey = "bnb_ai_dodge_policy";
@@ -91,6 +93,1099 @@ function GetTrainingFailureHeatPenalty(x, y) {
     }
     key = MapKey(x, y);
     return AIDodgeTrainer.State.failureHeatMap[key] || 0;
+}
+
+// =============================================================================
+// Offline ML (Behavioral Cloning V1)
+// =============================================================================
+
+var BNBMLDefaultModelUrl = "/output/ml/models/dodge_bc_v1.onnx";
+var BNBMLCollectStorageKey = "bnb_ml_collect_state_v1";
+var BNBMLConfig = {
+    enableRuntime: false,
+    enableCollect: false,
+    freezeExpertPolicy: false,
+    minConfidence: 0.34,
+    minMoveConfidence: 0.4,
+    top1Margin: 0.06,
+    modelUrl: BNBMLDefaultModelUrl,
+    preDeathWindowMs: 1500,
+    predictionReuseMs: 240,
+    collectWaitKeepProb: 0.15,
+    forceMoveEtaMs: 520,
+    waitBlockEtaMs: 760,
+    moveThreatSoonMs: 280
+};
+
+function GetBNBQueryParam(name) {
+    var query;
+    if (typeof window === "undefined" || !window.location || !window.location.search) {
+        return "";
+    }
+    query = new URLSearchParams(window.location.search);
+    return query.get(name) || "";
+}
+
+function ParseBNBBool(raw) {
+    if (raw == null) {
+        return false;
+    }
+    if (typeof raw === "boolean") {
+        return raw;
+    }
+    raw = String(raw).toLowerCase();
+    return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+function ParseBNBNumber(raw, fallback) {
+    var v = parseFloat(raw);
+    if (isNaN(v)) {
+        return fallback;
+    }
+    return v;
+}
+
+function RefreshBNBMLConfigFromQuery() {
+    var modelUrl = GetBNBQueryParam("ml_model");
+    BNBMLConfig.enableRuntime = ParseBNBBool(GetBNBQueryParam("ml"));
+    BNBMLConfig.enableCollect = ParseBNBBool(GetBNBQueryParam("ml_collect"));
+    BNBMLConfig.freezeExpertPolicy = ParseBNBBool(GetBNBQueryParam("ml_freeze"));
+    BNBMLConfig.minConfidence = ClampNumber(
+        ParseBNBNumber(GetBNBQueryParam("ml_conf"), BNBMLConfig.minConfidence),
+        0.05,
+        0.99
+    );
+    BNBMLConfig.minMoveConfidence = ClampNumber(
+        ParseBNBNumber(GetBNBQueryParam("ml_move_conf"), BNBMLConfig.minMoveConfidence),
+        0.05,
+        0.99
+    );
+    BNBMLConfig.top1Margin = ClampNumber(
+        ParseBNBNumber(GetBNBQueryParam("ml_margin"), BNBMLConfig.top1Margin),
+        0,
+        0.5
+    );
+    BNBMLConfig.collectWaitKeepProb = ClampNumber(
+        ParseBNBNumber(GetBNBQueryParam("ml_wait_keep"), BNBMLConfig.collectWaitKeepProb),
+        0,
+        1
+    );
+    BNBMLConfig.forceMoveEtaMs = ClampNumber(
+        ParseBNBNumber(GetBNBQueryParam("ml_force_move_eta"), BNBMLConfig.forceMoveEtaMs),
+        120,
+        2000
+    );
+    BNBMLConfig.waitBlockEtaMs = ClampNumber(
+        ParseBNBNumber(GetBNBQueryParam("ml_wait_block_eta"), BNBMLConfig.waitBlockEtaMs),
+        180,
+        2800
+    );
+    BNBMLConfig.moveThreatSoonMs = ClampNumber(
+        ParseBNBNumber(GetBNBQueryParam("ml_move_threat_ms"), BNBMLConfig.moveThreatSoonMs),
+        180,
+        1200
+    );
+    if (modelUrl) {
+        BNBMLConfig.modelUrl = modelUrl;
+    }
+}
+
+function GetBNBMLCollectWaitKeepProb() {
+    if (typeof window !== "undefined" && typeof window.BNBMLCollectWaitKeepProb === "number") {
+        return ClampNumber(window.BNBMLCollectWaitKeepProb, 0, 1);
+    }
+    return ClampNumber(BNBMLConfig.collectWaitKeepProb, 0, 1);
+}
+
+function IsOfflineMLExpertFreezeEnabled() {
+    if (typeof window !== "undefined" && ParseBNBBool(window.BNBMLFreezeExpertPolicy)) {
+        return true;
+    }
+    return !!BNBMLConfig.freezeExpertPolicy;
+}
+
+function NormalizeActionId(action) {
+    var a = parseInt(action, 10);
+    if (isNaN(a) || a < 0 || a > 4) {
+        return 0;
+    }
+    return a;
+}
+
+function EncodeDirectionToAction(direction) {
+    if (direction === Direction.Up) return 1;
+    if (direction === Direction.Down) return 2;
+    if (direction === Direction.Left) return 3;
+    if (direction === Direction.Right) return 4;
+    return 0;
+}
+
+function DecodeActionToDelta(action) {
+    var a = NormalizeActionId(action);
+    if (a === 1) return { dx: 0, dy: -1 };
+    if (a === 2) return { dx: 0, dy: 1 };
+    if (a === 3) return { dx: -1, dy: 0 };
+    if (a === 4) return { dx: 1, dy: 0 };
+    return { dx: 0, dy: 0 };
+}
+
+function EncodeActionByTargetMap(currentMap, targetMap) {
+    if (!currentMap || !targetMap) {
+        return 0;
+    }
+    if (targetMap.X === currentMap.X && targetMap.Y === currentMap.Y) {
+        return 0;
+    }
+    if (targetMap.X === currentMap.X && targetMap.Y === currentMap.Y - 1) {
+        return 1;
+    }
+    if (targetMap.X === currentMap.X && targetMap.Y === currentMap.Y + 1) {
+        return 2;
+    }
+    if (targetMap.X === currentMap.X - 1 && targetMap.Y === currentMap.Y) {
+        return 3;
+    }
+    if (targetMap.X === currentMap.X + 1 && targetMap.Y === currentMap.Y) {
+        return 4;
+    }
+    return 0;
+}
+
+function BuildTargetMapByAction(currentMap, action) {
+    var d = DecodeActionToDelta(action);
+    return {
+        X: currentMap.X + d.dx,
+        Y: currentMap.Y + d.dy
+    };
+}
+
+function EncodeActionFromChoice(choice, currentMap) {
+    if (!choice) {
+        return 0;
+    }
+    if (choice.targetMap && currentMap) {
+        return EncodeActionByTargetMap(currentMap, choice.targetMap);
+    }
+    if (choice.direction != null) {
+        return EncodeDirectionToAction(choice.direction);
+    }
+    return 0;
+}
+
+function IsRoleCountableForSurvival(role) {
+    return !!role && !role.IsDeath && !role.IsInPaopao;
+}
+
+function ComputeSurvivalRate(bombedCount, spawnedEffective) {
+    if (spawnedEffective <= 0) {
+        return 1;
+    }
+    return 1 - bombedCount / spawnedEffective;
+}
+
+function FormatMapPos(map) {
+    if (!map) {
+        return "(-,-)";
+    }
+    return "(" + map.X + "," + map.Y + ")";
+}
+
+function FormatDecisionPathText(startMap, targetMap, action) {
+    if (!startMap) {
+        return "n/a";
+    }
+    if (NormalizeActionId(action) === 0) {
+        return FormatMapPos(startMap) + " wait";
+    }
+    return FormatMapPos(startMap) + "->" + FormatMapPos(targetMap || startMap);
+}
+
+var BNBMLFeatureEncoder = {
+    BuildObstacleValue: function(cell) {
+        if (cell === 0 || cell > 100) {
+            return 0;
+        }
+        if (cell === 3 || cell === 8 || cell === 100) {
+            return 0.5;
+        }
+        if (typeof IsRigidBarrierNo === "function") {
+            return IsRigidBarrierNo(cell) ? 1.0 : 0.5;
+        }
+        return cell > 0 && cell < 100 ? 1.0 : 0.0;
+    },
+
+    CreateEmptyMap: function(rows, cols, channels) {
+        var y;
+        var x;
+        var c;
+        var map = new Array(rows);
+        for (y = 0; y < rows; y++) {
+            map[y] = new Array(cols);
+            for (x = 0; x < cols; x++) {
+                map[y][x] = new Array(channels);
+                for (c = 0; c < channels; c++) {
+                    map[y][x][c] = 0;
+                }
+            }
+        }
+        return map;
+    },
+
+    Encode: function(role, currentMap, snapshot) {
+        var rows = typeof MapRowCount === "number" ? MapRowCount : 13;
+        var cols = typeof MapColumnCount === "number" ? MapColumnCount : 15;
+        var channels = 5;
+        var now = Date.now();
+        var forecastMs = Math.max(1, AIDodgePolicy.forecastMs || 1750);
+        var fuseMs = typeof GetPaopaoFuseMs === "function" ? Math.max(1, GetPaopaoFuseMs()) : 3000;
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var map = this.CreateEmptyMap(rows, cols, channels);
+        var y;
+        var x;
+        var key;
+        var eta;
+        var bomb;
+        var bombEta;
+        var bombScore;
+        var safeNeighbors;
+        var mapPoint;
+        var centerX;
+        var centerY;
+        var dx = 0;
+        var dy = 0;
+
+        for (y = 0; y < rows; y++) {
+            for (x = 0; x < cols; x++) {
+                map[y][x][0] = this.BuildObstacleValue(townBarrierMap[y][x]);
+                key = MapKey(x, y);
+                eta = src && src.dangerEtaMap ? src.dangerEtaMap[key] : null;
+                if (typeof eta === "number" && eta <= forecastMs) {
+                    map[y][x][2] = ClampNumber(1 - eta / forecastMs, 0, 1);
+                }
+                safeNeighbors = CountSafeNeighborTiles(x, y, src);
+                map[y][x][4] = safeNeighbors >= 3 ? 1 : 0;
+            }
+        }
+
+        for (y = 0; y < PaopaoArray.length; y++) {
+            if (!PaopaoArray[y]) continue;
+            for (x = 0; x < PaopaoArray[y].length; x++) {
+                bomb = PaopaoArray[y][x];
+                if (!bomb || bomb.IsExploded || y >= rows || x >= cols) continue;
+                bombEta = (typeof bomb.ExplodeAt === "number" ? bomb.ExplodeAt : now + fuseMs) - now;
+                if (bombEta < 0) bombEta = 0;
+                bombScore = ClampNumber(1 - bombEta / fuseMs, 0, 1);
+                if (bombScore > map[y][x][1]) {
+                    map[y][x][1] = bombScore;
+                }
+            }
+        }
+
+        if (currentMap && currentMap.Y >= 0 && currentMap.Y < rows && currentMap.X >= 0 && currentMap.X < cols) {
+            map[currentMap.Y][currentMap.X][3] = 1;
+        }
+        if (role && typeof role.MapPoint === "function" && currentMap) {
+            mapPoint = role.MapPoint();
+            centerX = currentMap.X * 40 + 20;
+            centerY = currentMap.Y * 40 + 20;
+            dx = ClampNumber((mapPoint.X - centerX) / 20, -1, 1);
+            dy = ClampNumber((mapPoint.Y - centerY) / 20, -1, 1);
+        }
+
+        return {
+            state_map: map,
+            state_vector: [dx, dy]
+        };
+    },
+
+    ToNCHWFloat32: function(stateMap) {
+        var rows = stateMap.length;
+        var cols = rows > 0 ? stateMap[0].length : 0;
+        var channels = rows > 0 && cols > 0 ? stateMap[0][0].length : 0;
+        var out = new Float32Array(channels * rows * cols);
+        var c;
+        var y;
+        var x;
+        var idx = 0;
+        for (c = 0; c < channels; c++) {
+            for (y = 0; y < rows; y++) {
+                for (x = 0; x < cols; x++) {
+                    out[idx++] = stateMap[y][x][c];
+                }
+            }
+        }
+        return out;
+    }
+};
+
+var BNBMLDatasetCollector = {
+    State: {
+        enabled: false,
+        preDeathWindowMs: 1500,
+        rowsReady: [],
+        stagingRows: [],
+        lastOpenSample: null,
+        sampleIdSeed: 0,
+        samplesFinalized: 0,
+        actionHist: { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0 },
+        spawnedBubblesEffective: 0,
+        spawnedBubblesIgnoredTrapped: 0,
+        bombedCount: 0
+    },
+
+    Init: function() {
+        this.State.enabled = !!BNBMLConfig.enableCollect;
+        this.State.preDeathWindowMs = Math.max(1000, BNBMLConfig.preDeathWindowMs || 1500);
+        this.State.rowsReady = [];
+        this.State.stagingRows = [];
+        this.State.lastOpenSample = null;
+        this.State.sampleIdSeed = 0;
+        this.State.samplesFinalized = 0;
+        this.State.actionHist = { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0 };
+        this.State.spawnedBubblesEffective = 0;
+        this.State.spawnedBubblesIgnoredTrapped = 0;
+        this.State.bombedCount = 0;
+        this.PublishState();
+    },
+
+    ShouldCollect: function() {
+        return !!this.State.enabled;
+    },
+
+    BuildSampleMeta: function(monster, currentMap, snapshot, choice) {
+        var key = MapKey(currentMap.X, currentMap.Y);
+        var eta = snapshot && snapshot.dangerEtaMap ? snapshot.dangerEtaMap[key] : null;
+        return {
+            roleNumber: monster && monster.Role ? monster.Role.RoleNumber : -1,
+            x: currentMap.X,
+            y: currentMap.Y,
+            eta: typeof eta === "number" ? eta : null,
+            activeBombs: CountActiveBombs(),
+            safeNeighbors: CountSafeNeighborTiles(currentMap.X, currentMap.Y, snapshot),
+            nextSafeRank: choice ? choice.safeRank : null
+        };
+    },
+
+    InferTemporalPlanAction: function(monster, currentMap) {
+        var plan;
+        var route;
+        var cursor;
+        var node;
+        var target;
+        if (!monster || !currentMap) {
+            return null;
+        }
+        plan = monster.CurrentTemporalPlan;
+        route = plan && Array.isArray(plan.route) ? plan.route : null;
+        cursor = plan && typeof plan.cursor === "number" ? plan.cursor : -1;
+        if (!route || cursor < 0 || cursor >= route.length) {
+            return null;
+        }
+        node = route[cursor];
+        if (!node) {
+            return null;
+        }
+        if (node.action === "wait") {
+            return 0;
+        }
+        target = { X: node.x, Y: node.y };
+        if (Math.abs(target.X - currentMap.X) + Math.abs(target.Y - currentMap.Y) !== 1) {
+            return null;
+        }
+        return EncodeActionByTargetMap(currentMap, target);
+    },
+
+    FinalizeOpenSample: function(nextState, reward, done) {
+        var sample = this.State.lastOpenSample;
+        if (!sample) {
+            return;
+        }
+        sample.next_state = nextState;
+        sample.reward = typeof reward === "number" ? reward : 1;
+        sample.done = !!done;
+        this.State.stagingRows.push(sample);
+        this.State.actionHist[String(sample.action)] = (this.State.actionHist[String(sample.action)] || 0) + 1;
+        this.State.samplesFinalized += 1;
+        this.State.lastOpenSample = null;
+    },
+
+    FlushStagingRows: function(forceAll) {
+        var now = Date.now();
+        var i;
+        var row;
+        var keep = [];
+        var limitTs = now - this.State.preDeathWindowMs;
+        for (i = 0; i < this.State.stagingRows.length; i++) {
+            row = this.State.stagingRows[i];
+            if (forceAll || row.ts <= limitTs || row.done) {
+                this.State.rowsReady.push(row);
+            }
+            else {
+                keep.push(row);
+            }
+        }
+        this.State.stagingRows = keep;
+    },
+
+    MarkRecentPreDeath: function() {
+        var now = Date.now();
+        var cutoff = now - this.State.preDeathWindowMs;
+        var i;
+        for (i = this.State.stagingRows.length - 1; i >= 0; i--) {
+            if (this.State.stagingRows[i].ts < cutoff) {
+                break;
+            }
+            this.State.stagingRows[i].pre_death = true;
+        }
+        for (i = this.State.rowsReady.length - 1; i >= 0; i--) {
+            if (this.State.rowsReady[i].ts < cutoff) {
+                break;
+            }
+            this.State.rowsReady[i].pre_death = true;
+        }
+    },
+
+    RecordFrame: function(monster, currentMap, snapshot) {
+        var encoded;
+        var choice;
+        var action;
+        var actionSource = "rule";
+        var temporalAction;
+        var newSample;
+        var key;
+        var eta;
+        var isDangerNow;
+
+        if (!this.ShouldCollect() || !monster || !monster.Role || !currentMap) {
+            return;
+        }
+        if (typeof AIDodgeTrainer !== "undefined"
+            && AIDodgeTrainer
+            && typeof AIDodgeTrainer.IsMonsterTraining === "function"
+            && !AIDodgeTrainer.IsMonsterTraining(monster)) {
+            return;
+        }
+
+        encoded = BNBMLFeatureEncoder.Encode(monster.Role, currentMap, snapshot);
+        choice = PickNextFrameMovementChoice(monster.Role, currentMap, snapshot);
+        action = EncodeActionFromChoice(choice, currentMap);
+        temporalAction = this.InferTemporalPlanAction(monster, currentMap);
+        if (typeof temporalAction === "number" && temporalAction >= 0 && temporalAction <= 4) {
+            if (action === 0 && temporalAction !== 0) {
+                action = temporalAction;
+                actionSource = "temporal_plan";
+            }
+            else if (action === 0 && temporalAction === 0) {
+                actionSource = "temporal_plan_wait";
+            }
+        }
+        key = MapKey(currentMap.X, currentMap.Y);
+        eta = snapshot && snapshot.dangerEtaMap ? snapshot.dangerEtaMap[key] : null;
+        isDangerNow = !!(snapshot && snapshot.threatMap && snapshot.threatMap[key]);
+
+        // Reduce severe class imbalance: keep waits mostly in urgent contexts.
+        if (action === 0) {
+            var keepWaitProb = GetBNBMLCollectWaitKeepProb();
+            if (!isDangerNow
+                && (typeof eta !== "number" || eta > Math.max(320, AIDodgePolicy.safeBufferMs + 120))
+                && Math.random() > keepWaitProb) {
+                return;
+            }
+        }
+
+        if (this.State.lastOpenSample) {
+            this.FinalizeOpenSample(encoded, 1, false);
+        }
+
+        newSample = {
+            id: "S" + (++this.State.sampleIdSeed),
+            ts: Date.now(),
+            state: {
+                state_map: encoded.state_map,
+                state_vector: encoded.state_vector
+            },
+            action: NormalizeActionId(action),
+            reward: 0,
+            done: false,
+            next_state: null,
+            pre_death: false,
+            meta: this.BuildSampleMeta(monster, currentMap, snapshot, choice)
+        };
+        newSample.meta.action_source = actionSource;
+        this.State.lastOpenSample = newSample;
+        this.FlushStagingRows(false);
+        this.PublishState();
+    },
+
+    OnBombed: function() {
+        if (!this.ShouldCollect()) {
+            return;
+        }
+        this.State.bombedCount += 1;
+        this.MarkRecentPreDeath();
+        if (this.State.lastOpenSample) {
+            this.State.lastOpenSample.pre_death = true;
+            this.FinalizeOpenSample(null, -1, true);
+        }
+        this.PublishState();
+    },
+
+    OnBubbleSpawned: function(role) {
+        if (!this.ShouldCollect()) {
+            return;
+        }
+        if (IsRoleCountableForSurvival(role)) {
+            this.State.spawnedBubblesEffective += 1;
+        }
+        else {
+            this.State.spawnedBubblesIgnoredTrapped += 1;
+        }
+        this.PublishState();
+    },
+
+    Drain: function(maxRows) {
+        var rows;
+        var count = Math.max(1, parseInt(maxRows, 10) || 2048);
+        this.FlushStagingRows(false);
+        rows = this.State.rowsReady.splice(0, count);
+        this.PublishState();
+        return rows;
+    },
+
+    ForceDrainAll: function() {
+        this.FlushStagingRows(true);
+        if (this.State.lastOpenSample) {
+            this.FinalizeOpenSample(null, 1, false);
+            this.FlushStagingRows(true);
+        }
+        this.PublishState();
+        return this.State.rowsReady.splice(0);
+    },
+
+    PublishState: function() {
+        var state = this.State;
+        var survivalRate = ComputeSurvivalRate(state.bombedCount, state.spawnedBubblesEffective);
+        if (typeof window === "undefined") {
+            return;
+        }
+        window.BNBMLDatasetCollectorState = {
+            enabled: !!state.enabled,
+            pre_death_window_ms: state.preDeathWindowMs,
+            samples_finalized: state.samplesFinalized,
+            rows_ready: state.rowsReady.length,
+            rows_staging: state.stagingRows.length,
+            action_hist: JSON.parse(JSON.stringify(state.actionHist)),
+            spawned_bubbles: state.spawnedBubblesEffective,
+            spawned_bubbles_effective: state.spawnedBubblesEffective,
+            spawned_bubbles_ignored_trapped: state.spawnedBubblesIgnoredTrapped,
+            bombed_count: state.bombedCount,
+            survival_rate: survivalRate
+        };
+    }
+};
+
+var BNBMLRuntime = {
+    State: {
+        enabled: false,
+        modelUrl: BNBMLDefaultModelUrl,
+        minConfidence: 0.34,
+        loading: false,
+        loaded: false,
+        error: "",
+        session: null,
+        inflight: false,
+        latestPrediction: null,
+        inferenceCount: 0,
+        usedCount: 0,
+        fallbackCount: 0,
+        avgLatencyMs: 0,
+        actionHist: { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0 },
+        spawnedBubblesEffective: 0,
+        spawnedBubblesIgnoredTrapped: 0,
+        bombedCount: 0,
+        lastDecisionSource: "",
+        lastFallbackReason: "",
+        decisionTrace: [],
+        lastDecisionLogAt: 0,
+        lastDecisionLogSig: ""
+    },
+
+    Init: function() {
+        this.State.enabled = !!BNBMLConfig.enableRuntime;
+        this.State.modelUrl = BNBMLConfig.modelUrl || BNBMLDefaultModelUrl;
+        this.State.minConfidence = BNBMLConfig.minConfidence;
+        this.State.inferenceCount = 0;
+        this.State.usedCount = 0;
+        this.State.fallbackCount = 0;
+        this.State.avgLatencyMs = 0;
+        this.State.actionHist = { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0 };
+        this.State.latestPrediction = null;
+        this.State.spawnedBubblesEffective = 0;
+        this.State.spawnedBubblesIgnoredTrapped = 0;
+        this.State.bombedCount = 0;
+        this.State.lastDecisionSource = "";
+        this.State.lastFallbackReason = "";
+        this.State.decisionTrace = [];
+        this.State.lastDecisionLogAt = 0;
+        this.State.lastDecisionLogSig = "";
+        this.State.error = "";
+        this.PublishState();
+    },
+
+    ShouldUseContext: function(currentMap, snapshot) {
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var key;
+        var eta;
+        if (!this.State.enabled || !currentMap) {
+            return false;
+        }
+        if (CountActiveBombs() <= 0) {
+            return false;
+        }
+        key = MapKey(currentMap.X, currentMap.Y);
+        eta = src && src.dangerEtaMap ? src.dangerEtaMap[key] : null;
+        if (src && src.threatMap && src.threatMap[key]) {
+            return true;
+        }
+        return typeof eta === "number" && eta <= Math.max(620, AIDodgePolicy.safeBufferMs + 320);
+    },
+
+    EnsureOrtReady: function() {
+        var self = this;
+        if (typeof window === "undefined") {
+            return Promise.reject(new Error("window_unavailable"));
+        }
+        if (window.ort) {
+            return Promise.resolve(window.ort);
+        }
+        if (window.__bnbOrtLoadingPromise) {
+            return window.__bnbOrtLoadingPromise;
+        }
+        window.__bnbOrtLoadingPromise = new Promise(function(resolve, reject) {
+            var script = document.createElement("script");
+            script.src = "https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js";
+            script.async = true;
+            script.onload = function() {
+                resolve(window.ort);
+            };
+            script.onerror = function() {
+                reject(new Error("onnxruntime_web_load_failed"));
+            };
+            document.head.appendChild(script);
+        }).catch(function(err) {
+            self.State.error = String(err && err.message ? err.message : err);
+            self.PublishState();
+            throw err;
+        });
+        return window.__bnbOrtLoadingPromise;
+    },
+
+    EnsureSession: function() {
+        var self = this;
+        if (!this.State.enabled) {
+            return Promise.resolve(null);
+        }
+        if (this.State.session) {
+            return Promise.resolve(this.State.session);
+        }
+        if (this.State.loading) {
+            return Promise.resolve(null);
+        }
+        this.State.loading = true;
+        this.PublishState();
+        return this.EnsureOrtReady()
+            .then(function(ort) {
+                return ort.InferenceSession.create(self.State.modelUrl, {
+                    executionProviders: ["wasm"]
+                });
+            })
+            .then(function(session) {
+                self.State.session = session;
+                self.State.loaded = true;
+                self.State.error = "";
+                self.State.loading = false;
+                self.PublishState();
+                return session;
+            })
+            .catch(function(err) {
+                self.State.error = String(err && err.message ? err.message : err);
+                self.State.loading = false;
+                self.State.loaded = false;
+                self.PublishState();
+                return null;
+            });
+    },
+
+    SoftmaxArgmax: function(logits) {
+        var maxV = -Infinity;
+        var sum = 0;
+        var i;
+        var probs = [];
+        var best = 0;
+        var bestP = 0;
+        for (i = 0; i < logits.length; i++) {
+            if (logits[i] > maxV) {
+                maxV = logits[i];
+            }
+        }
+        for (i = 0; i < logits.length; i++) {
+            probs[i] = Math.exp(logits[i] - maxV);
+            sum += probs[i];
+        }
+        for (i = 0; i < probs.length; i++) {
+            probs[i] = sum > 0 ? probs[i] / sum : 0;
+            if (probs[i] > bestP) {
+                bestP = probs[i];
+                best = i;
+            }
+        }
+        return {
+            action: best,
+            confidence: bestP,
+            probs: probs
+        };
+    },
+
+    ValidateAction: function(action, currentMap, snapshot) {
+        var a = NormalizeActionId(action);
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var target;
+        var key;
+        if (!currentMap) {
+            return false;
+        }
+        if (a === 0) {
+            key = MapKey(currentMap.X, currentMap.Y);
+            if (src && src.threatMap && src.threatMap[key]) {
+                return false;
+            }
+            if (IsTileThreatSoon(key, 120, src)) {
+                return false;
+            }
+            return true;
+        }
+        target = BuildTargetMapByAction(currentMap, a);
+        if (!IsAIWalkable(target.X, target.Y)) {
+            return false;
+        }
+        key = MapKey(target.X, target.Y);
+        if (IsTileThreatSoon(key, Math.max(220, BNBMLConfig.moveThreatSoonMs || 280), src)) {
+            return false;
+        }
+        return true;
+    },
+
+    GetTileEta: function(currentMap, snapshot) {
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var key;
+        if (!currentMap || !src || !src.dangerEtaMap) {
+            return null;
+        }
+        key = MapKey(currentMap.X, currentMap.Y);
+        return typeof src.dangerEtaMap[key] === "number" ? src.dangerEtaMap[key] : null;
+    },
+
+    ShouldForceMoveNow: function(currentMap, snapshot) {
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var key;
+        var eta;
+        var exits;
+        if (!currentMap || !src) {
+            return false;
+        }
+        key = MapKey(currentMap.X, currentMap.Y);
+        eta = this.GetTileEta(currentMap, src);
+        exits = CountSafeNeighborTiles(currentMap.X, currentMap.Y, src);
+        if (src.threatMap && src.threatMap[key]) {
+            return true;
+        }
+        if (typeof eta === "number" && eta <= Math.max(180, BNBMLConfig.forceMoveEtaMs || 520)) {
+            return true;
+        }
+        return CountActiveBombs() > 0 && exits <= 1;
+    },
+
+    PassGuardrail: function(action, confidence, currentMap, snapshot, ranked, pred) {
+        var a = NormalizeActionId(action);
+        var top1;
+        var top2;
+        var eta;
+        if (!currentMap) {
+            return false;
+        }
+        if (a === 0) {
+            eta = this.GetTileEta(currentMap, snapshot);
+            if (this.ShouldForceMoveNow(currentMap, snapshot)) {
+                return false;
+            }
+            if (typeof eta === "number" && eta <= Math.max(220, BNBMLConfig.waitBlockEtaMs || 760)) {
+                return false;
+            }
+            top1 = pred && pred.probs ? (pred.probs[ranked[0]] || 0) : confidence;
+            top2 = pred && pred.probs ? (pred.probs[ranked[1]] || 0) : 0;
+            if (top1 - top2 < Math.max(0, BNBMLConfig.top1Margin || 0)) {
+                return false;
+            }
+            return true;
+        }
+        if (confidence < Math.max(this.State.minConfidence, BNBMLConfig.minMoveConfidence || 0.4)) {
+            return false;
+        }
+        return true;
+    },
+
+    SchedulePrediction: function(role, currentMap, snapshot) {
+        var self = this;
+        var startedAt = Date.now();
+        var encoded;
+        var mapTensor;
+        var vectorTensor;
+        var session = this.State.session;
+        var inputNames;
+        var outputNames;
+        var mapName;
+        var vecName;
+
+        if (!session || this.State.inflight || !role || !currentMap) {
+            return;
+        }
+        encoded = BNBMLFeatureEncoder.Encode(role, currentMap, snapshot);
+        mapTensor = BNBMLFeatureEncoder.ToNCHWFloat32(encoded.state_map);
+        vectorTensor = new Float32Array(encoded.state_vector);
+        inputNames = session.inputNames || [];
+        outputNames = session.outputNames || [];
+        mapName = inputNames.length > 0 ? inputNames[0] : "state_map";
+        vecName = inputNames.length > 1 ? inputNames[1] : "state_vector";
+        if (inputNames.length > 1
+            && inputNames[0].toLowerCase().indexOf("vector") !== -1
+            && inputNames[1].toLowerCase().indexOf("map") !== -1) {
+            mapName = inputNames[1];
+            vecName = inputNames[0];
+        }
+
+        this.State.inflight = true;
+        session.run({
+            [mapName]: new window.ort.Tensor("float32", mapTensor, [1, 5, encoded.state_map.length, encoded.state_map[0].length]),
+            [vecName]: new window.ort.Tensor("float32", vectorTensor, [1, vectorTensor.length])
+        }).then(function(outputs) {
+            var outName = outputNames.length > 0 ? outputNames[0] : Object.keys(outputs)[0];
+            var data = outputs[outName] && outputs[outName].data ? outputs[outName].data : [];
+            var decoded = self.SoftmaxArgmax(data);
+            var latency = Date.now() - startedAt;
+            self.State.inferenceCount += 1;
+            self.State.avgLatencyMs = self.State.avgLatencyMs <= 0
+                ? latency
+                : (self.State.avgLatencyMs * 0.9 + latency * 0.1);
+            self.State.latestPrediction = {
+                ts: Date.now(),
+                action: NormalizeActionId(decoded.action),
+                confidence: decoded.confidence,
+                probs: decoded.probs,
+                mapKey: MapKey(currentMap.X, currentMap.Y)
+            };
+            self.State.inflight = false;
+            self.PublishState();
+        }).catch(function(err) {
+            self.State.error = String(err && err.message ? err.message : err);
+            self.State.inflight = false;
+            self.PublishState();
+        });
+    },
+
+    DecideAction: function(monster, currentMap, snapshot) {
+        var pred = this.State.latestPrediction;
+        var now = Date.now();
+        var ranked;
+        var i;
+        var candidate;
+        var conf;
+        if (!this.State.enabled || !monster || !monster.Role || !currentMap) {
+            return { ok: false, reason: "disabled_or_invalid" };
+        }
+        this.EnsureSession();
+        if (this.State.session) {
+            this.SchedulePrediction(monster.Role, currentMap, snapshot);
+        }
+        if (!pred || now - pred.ts > Math.max(120, BNBMLConfig.predictionReuseMs || 240)) {
+            this.State.fallbackCount += 1;
+            this.PublishState();
+            return { ok: false, reason: "prediction_not_ready" };
+        }
+        if (pred.confidence < this.State.minConfidence) {
+            this.State.fallbackCount += 1;
+            this.PublishState();
+            return { ok: false, reason: "low_confidence" };
+        }
+
+        ranked = [0, 1, 2, 3, 4];
+        ranked.sort(function(a, b) {
+            return (pred.probs[b] || 0) - (pred.probs[a] || 0);
+        });
+        candidate = null;
+        for (i = 0; i < ranked.length; i++) {
+            if (this.ValidateAction(ranked[i], currentMap, snapshot)) {
+                conf = pred.probs && pred.probs[ranked[i]] != null ? pred.probs[ranked[i]] : pred.confidence;
+                if (this.PassGuardrail(ranked[i], conf, currentMap, snapshot, ranked, pred)) {
+                    candidate = ranked[i];
+                    break;
+                }
+            }
+        }
+        if (candidate == null) {
+            this.State.fallbackCount += 1;
+            this.PublishState();
+            return { ok: false, reason: "guardrail_rejected" };
+        }
+        this.State.usedCount += 1;
+        this.State.actionHist[String(candidate)] = (this.State.actionHist[String(candidate)] || 0) + 1;
+        this.PublishState();
+        return {
+            ok: true,
+            action: candidate,
+            confidence: pred.probs && pred.probs[candidate] != null ? pred.probs[candidate] : pred.confidence
+        };
+    },
+
+    AppendDecisionTrace: function(info) {
+        var item = info || {};
+        var trace = this.State.decisionTrace;
+        var msg;
+        var sig;
+        var canConsole = true;
+        var now;
+        var minInterval = 120;
+        item.ts = item.ts || Date.now();
+        trace.push(item);
+        if (trace.length > 120) {
+            trace.splice(0, trace.length - 120);
+        }
+        this.State.lastDecisionSource = item.source || "";
+        this.State.lastFallbackReason = item.fallback_reason || "";
+        msg = "[BNB-ML][battle] source=" + (item.source || "unknown")
+            + " reason=" + (item.reason || "")
+            + " conf=" + (typeof item.confidence === "number" ? item.confidence.toFixed(3) : "na")
+            + " start=" + (item.start || "(-,-)")
+            + " path=" + (item.path || "n/a");
+        sig = (item.source || "")
+            + "|" + (item.reason || "")
+            + "|" + (item.fallback_reason || "")
+            + "|" + (item.start || "")
+            + "|" + (item.path || "");
+        now = item.ts;
+        if (this.State.lastDecisionLogSig === sig && now - this.State.lastDecisionLogAt < minInterval) {
+            canConsole = false;
+        }
+        if (canConsole && typeof console !== "undefined" && typeof console.log === "function") {
+            console.log(msg);
+            this.State.lastDecisionLogAt = now;
+            this.State.lastDecisionLogSig = sig;
+        }
+        this.PublishState();
+    },
+
+    RecordModelDecision: function(currentMap, targetMap, action, confidence) {
+        this.AppendDecisionTrace({
+            source: "model",
+            reason: "model_action",
+            fallback_reason: "",
+            confidence: typeof confidence === "number" ? confidence : null,
+            action: NormalizeActionId(action),
+            start: FormatMapPos(currentMap),
+            path: FormatDecisionPathText(currentMap, targetMap, action)
+        });
+    },
+
+    RecordRuleDecision: function(currentMap, targetMap, reason) {
+        this.AppendDecisionTrace({
+            source: "rule",
+            reason: reason || "rule_dodge",
+            fallback_reason: reason || "",
+            confidence: null,
+            action: targetMap && currentMap && targetMap.X === currentMap.X && targetMap.Y === currentMap.Y ? 0 : null,
+            start: FormatMapPos(currentMap),
+            path: FormatDecisionPathText(
+                currentMap,
+                targetMap || currentMap,
+                targetMap && currentMap && targetMap.X === currentMap.X && targetMap.Y === currentMap.Y ? 0 : 4
+            )
+        });
+    },
+
+    OnBubbleSpawned: function(role) {
+        if (IsRoleCountableForSurvival(role)) {
+            this.State.spawnedBubblesEffective += 1;
+        }
+        else {
+            this.State.spawnedBubblesIgnoredTrapped += 1;
+        }
+        this.PublishState();
+    },
+
+    OnBombed: function() {
+        this.State.bombedCount += 1;
+        this.PublishState();
+    },
+
+    PublishState: function() {
+        var s = this.State;
+        var totalDecision = s.usedCount + s.fallbackCount;
+        var fallbackRate = totalDecision > 0 ? s.fallbackCount / totalDecision : 0;
+        var survivalRate = ComputeSurvivalRate(s.bombedCount, s.spawnedBubblesEffective);
+        if (typeof window === "undefined") {
+            return;
+        }
+        window.BNBMLRuntimeState = {
+            enabled: !!s.enabled,
+            model_url: s.modelUrl,
+            min_confidence: s.minConfidence,
+            min_move_confidence: BNBMLConfig.minMoveConfidence,
+            top1_margin: BNBMLConfig.top1Margin,
+            force_move_eta_ms: BNBMLConfig.forceMoveEtaMs,
+            wait_block_eta_ms: BNBMLConfig.waitBlockEtaMs,
+            loading: !!s.loading,
+            loaded: !!s.loaded,
+            inflight: !!s.inflight,
+            error: s.error || "",
+            inference_count: s.inferenceCount,
+            used_count: s.usedCount,
+            fallback_count: s.fallbackCount,
+            fallback_rate: fallbackRate,
+            avg_latency_ms: s.avgLatencyMs,
+            action_hist: JSON.parse(JSON.stringify(s.actionHist)),
+            latest_prediction: s.latestPrediction ? {
+                ts: s.latestPrediction.ts,
+                action: s.latestPrediction.action,
+                confidence: s.latestPrediction.confidence,
+                mapKey: s.latestPrediction.mapKey
+            } : null,
+            spawned_bubbles: s.spawnedBubblesEffective,
+            spawned_bubbles_effective: s.spawnedBubblesEffective,
+            spawned_bubbles_ignored_trapped: s.spawnedBubblesIgnoredTrapped,
+            bombed_count: s.bombedCount,
+            survival_rate: survivalRate,
+            last_decision_source: s.lastDecisionSource,
+            last_fallback_reason: s.lastFallbackReason,
+            decision_trace_tail: s.decisionTrace.slice(Math.max(0, s.decisionTrace.length - 20))
+        };
+    }
+};
+
+RefreshBNBMLConfigFromQuery();
+BNBMLDatasetCollector.Init();
+BNBMLRuntime.Init();
+
+if (typeof window !== "undefined") {
+    window.BNBMLCollectorDrain = function(maxRows) {
+        return BNBMLDatasetCollector.Drain(maxRows);
+    };
+    window.BNBMLCollectorDrainAll = function() {
+        return BNBMLDatasetCollector.ForceDrainAll();
+    };
+    window.BNBMLRefreshConfig = function() {
+        RefreshBNBMLConfigFromQuery();
+        BNBMLDatasetCollector.Init();
+        BNBMLRuntime.Init();
+    };
 }
 
 // =============================================================================
@@ -1605,9 +2700,9 @@ var Monster = function() {
     this.Role.Object.Size = new Size(56, 67);
     this.Role.AniSize = new Size(56, 70);
     this.Role.DieSize = new Size(56, 98);
-    this.Role.SetRawSpeed(RoleConstant.MaxMoveStep);
-    this.Role.PaopaoStrong = RoleConstant.MaxPaopaoStrong;
-    this.Role.CanPaopaoLength = MonsterMaxPaopaoLength;
+    this.Role.SetMoveSpeedPxPerSec(RoleBalanceConfig.InitialSpeedPxPerSec);
+    this.Role.PaopaoStrong = ClampRolePower(RoleBalanceConfig.InitialPower);
+    this.Role.CanPaopaoLength = ClampRoleBubbleCount(RoleBalanceConfig.InitialBubbleCount);
 
     this.ThinkInterval = null;
     this.LastBombAt = 0;
@@ -1685,11 +2780,16 @@ Monster.prototype.Start = function() {
     self.ActiveThinkIntervalMs = thinkMs;
     self.Think();
     self.ThinkInterval = setInterval(function() {
-        if (!self.Role.IsDeath && !self.Role.IsInPaopao) {
-            self.Think();
-        } else {
+        if (self.Role.IsDeath) {
             self.Stop();
+            return;
         }
+        // 被困泡时仅暂停决策，不销毁 ThinkInterval，避免脱困后 AI 永久停摆
+        if (self.Role.IsInPaopao) {
+            self.Role.Stop();
+            return;
+        }
+        self.Think();
     }, thinkMs);
 };
 
@@ -1764,12 +2864,35 @@ Monster.prototype.Think = function() {
         return;
     }
 
+    var mlDecision = this.TryOfflineMLDodgeAction(currentMap, threatSnapshot, "battle");
+    if (mlDecision && mlDecision.handled) {
+        return;
+    }
+
     // ───── 1. EVADE — 处于危险区时立即逃跑 ─────
     if (threatMap[currentKey]) {
         this.AttackPlan = null;
         this.State = "evade";
         var safe = this.FindSafeTile(currentMap, threatMap, threatSnapshot);
-        if (safe) this.MoveToMap(safe);
+        if (safe) {
+            this.MoveToMap(safe);
+            if (BNBMLRuntime && typeof BNBMLRuntime.RecordRuleDecision === "function") {
+                BNBMLRuntime.RecordRuleDecision(
+                    currentMap,
+                    safe,
+                    mlDecision && mlDecision.attempted ? ("fallback_" + (mlDecision.reason || "unknown")) : "rule_evade"
+                );
+            }
+        }
+        else {
+            if (BNBMLRuntime && typeof BNBMLRuntime.RecordRuleDecision === "function") {
+                BNBMLRuntime.RecordRuleDecision(
+                    currentMap,
+                    currentMap,
+                    mlDecision && mlDecision.attempted ? ("fallback_" + (mlDecision.reason || "unknown") + "_wait") : "rule_evade_wait"
+                );
+            }
+        }
         return;
     }
 
@@ -1907,6 +3030,43 @@ Monster.prototype.GetActiveTrainingTrainer = function() {
         return null;
     }
     return AIDodgeTrainer;
+};
+
+Monster.prototype.TryOfflineMLDodgeAction = function(currentMap, threatSnapshot, modeTag) {
+    var snapshot = threatSnapshot || LastThreatSnapshot || BuildThreatSnapshot();
+    var decision;
+    var action;
+    var targetMap;
+    if (!currentMap || !BNBMLRuntime || !BNBMLRuntime.ShouldUseContext(currentMap, snapshot)) {
+        return { handled: false, attempted: false, reason: "context_not_applicable" };
+    }
+    decision = BNBMLRuntime.DecideAction(this, currentMap, snapshot);
+    if (!decision || !decision.ok) {
+        return {
+            handled: false,
+            attempted: true,
+            reason: decision && decision.reason ? decision.reason : "decision_failed"
+        };
+    }
+    action = NormalizeActionId(decision.action);
+    if (action === 0) {
+        this.Role.Stop();
+        this.State = modeTag === "training" ? "ml_dodge_training_wait" : "ml_dodge_wait";
+        if (modeTag === "battle" && typeof BNBMLRuntime.RecordModelDecision === "function") {
+            BNBMLRuntime.RecordModelDecision(currentMap, currentMap, action, decision.confidence);
+        }
+        return { handled: true, attempted: true, reason: "model_wait", action: action };
+    }
+    targetMap = BuildTargetMapByAction(currentMap, action);
+    if (!targetMap || !IsAIWalkable(targetMap.X, targetMap.Y)) {
+        return { handled: false, attempted: true, reason: "model_action_invalid_target" };
+    }
+    this.MoveToMap(targetMap, true);
+    this.State = modeTag === "training" ? "ml_dodge_training_move" : "ml_dodge_move";
+    if (modeTag === "battle" && typeof BNBMLRuntime.RecordModelDecision === "function") {
+        BNBMLRuntime.RecordModelDecision(currentMap, targetMap, action, decision.confidence);
+    }
+    return { handled: true, attempted: true, reason: "model_move", action: action };
 };
 
 Monster.prototype.ResetTemporalPlanState = function(sceneRevision) {
@@ -2262,6 +3422,12 @@ Monster.prototype.ThinkDodgeTraining = function(currentMap, threatMap, threatSna
         && this.CurrentTemporalPlan.cursor < this.CurrentTemporalPlan.route.length
         ? this.CurrentTemporalPlan.route[this.CurrentTemporalPlan.cursor]
         : null;
+
+    BNBMLDatasetCollector.RecordFrame(this, currentMap, threatSnapshot);
+    var mlDecision = this.TryOfflineMLDodgeAction(currentMap, threatSnapshot, "training");
+    if (mlDecision && mlDecision.handled) {
+        return;
+    }
 
     if (!this.CurrentTemporalPlan && hasBombs && (now - this.LastTemporalReplanAt > 180)) {
         needReplan = true;
@@ -2652,11 +3818,6 @@ Monster.prototype.ScoreItem = function(itemCode) {
         case 101: return role.CanPaopaoLength < MonsterMaxPaopaoLength ? 3 : 0.5;
         case 102: return role.MoveStep < RoleConstant.MaxMoveStep ? 3 : 0.5;
         case 103: return role.PaopaoStrong < RoleConstant.MaxPaopaoStrong ? 3 : 0.5;
-        case 104: return role.PaopaoStrong < RoleConstant.MaxPaopaoStrong ? 8 : 0.5;
-        case 105: return role.MoveStep < RoleConstant.MaxMoveStep ? 8 : 0.5;
-        case 106: return role.IsCanMovePaopao ? 0.5 : 6;
-        case 107: case 108: case 109:
-            return role.MoveHorse !== MoveHorseObject.None ? 0.5 : 2;
         default: return 1;
     }
 };
@@ -2669,7 +3830,7 @@ Monster.prototype.FindBestItem = function(currentMap, threatMap) {
     for (var y = 0; y < 13; y++) {
         for (var x = 0; x < 15; x++) {
             var v = townBarrierMap[y][x];
-            if (v < 101 || v > 109) continue;
+            if (v < 101 || v > 103) continue;
 
             var key = MapKey(x, y);
             if (threatMap[key] || !(key in bfs.dist)) continue;
@@ -3139,6 +4300,10 @@ var AIDodgeTrainer = {
         var changed = false;
         var source = tag || "attempt_start";
 
+        if (IsOfflineMLExpertFreezeEnabled()) {
+            return null;
+        }
+
         if (typeof floor.forecastMs === "number" && AIDodgePolicy.forecastMs < floor.forecastMs) {
             AIDodgePolicy.forecastMs = floor.forecastMs;
             changed = true;
@@ -3317,6 +4482,8 @@ var AIDodgeTrainer = {
         }
         this.BubbleCaster.CastMapID = tile;
         new Paopao(this.BubbleCaster);
+        BNBMLDatasetCollector.OnBubbleSpawned(this.Role);
+        BNBMLRuntime.OnBubbleSpawned(this.Role);
         return true;
     },
 
@@ -3835,6 +5002,15 @@ var AIDodgeTrainer = {
         var actions = [];
         var ctx = context || {};
 
+        if (IsOfflineMLExpertFreezeEnabled()) {
+            return {
+                phase: phase || "attempt",
+                reason: reason,
+                repeatLevel: lvl,
+                actions: ["专家策略冻结（跳过在线调参）"]
+            };
+        }
+
         switch (reason) {
             case "晚撤离":
                 AIDodgePolicy.forecastMs += Math.round(70 * severity);
@@ -3908,6 +5084,8 @@ var AIDodgeTrainer = {
         if (!this.IsRunning || !this.IsAttemptActive || victim !== this.Role) {
             return;
         }
+        BNBMLDatasetCollector.OnBombed();
+        BNBMLRuntime.OnBombed();
         eventId = victim.LastUnsafeExplosionEventId;
         if (!eventId && victim.LastUnsafeExplosionEventIds && victim.LastUnsafeExplosionEventIds.length > 0) {
             eventId = victim.LastUnsafeExplosionEventIds[0];
@@ -4169,37 +5347,43 @@ var AIDodgeTrainer = {
         var repeatLevel;
         var adjust;
         var reasonCount;
+        var freezeAdjust = IsOfflineMLExpertFreezeEnabled();
 
-        for (reason in counts) {
-            if (!counts.hasOwnProperty(reason)) {
-                continue;
+        if (!freezeAdjust) {
+            for (reason in counts) {
+                if (!counts.hasOwnProperty(reason)) {
+                    continue;
+                }
+                reasonCount = counts[reason] || 0;
+                if (reasonCount <= 0) {
+                    continue;
+                }
+                repeatLevel = memory[reason] ? memory[reason].consecutiveAttempts : 1;
+                adjust = this.ApplyAntiRepeatAdjustment(reason, repeatLevel, contextAnalysis, "attempt_end");
+                actions.push(reason + "x" + reasonCount + " -> " + adjust.actions.join("、"));
             }
-            reasonCount = counts[reason] || 0;
-            if (reasonCount <= 0) {
-                continue;
+
+            if (contextAnalysis.total === 0) {
+                adjust = this.ApplyAntiRepeatAdjustment("随机爆线覆盖", 1, contextAnalysis, "attempt_end");
+                actions.push("无失败样本 -> " + adjust.actions.join("、"));
             }
-            repeatLevel = memory[reason] ? memory[reason].consecutiveAttempts : 1;
-            adjust = this.ApplyAntiRepeatAdjustment(reason, repeatLevel, contextAnalysis, "attempt_end");
-            actions.push(reason + "x" + reasonCount + " -> " + adjust.actions.join("、"));
-        }
 
-        if (contextAnalysis.total === 0) {
-            adjust = this.ApplyAntiRepeatAdjustment("随机爆线覆盖", 1, contextAnalysis, "attempt_end");
-            actions.push("无失败样本 -> " + adjust.actions.join("、"));
+            if (contextAnalysis.lowExitRate >= 0.45) {
+                AIDodgePolicy.roamRadius += 1;
+                AIDodgePolicy.stuckTimeoutMs -= 40;
+                NormalizeDodgePolicyValue(AIDodgePolicy);
+                SaveAIDodgePolicy();
+                actions.push("低出口区域占比高，增大巡逻半径并提前解卡");
+            }
+            if (contextAnalysis.riskyHalfBodyRate >= 0.35) {
+                AIDodgePolicy.halfBodyMinEtaMs += 25;
+                NormalizeDodgePolicyValue(AIDodgePolicy);
+                SaveAIDodgePolicy();
+                actions.push("半身高风险样本偏多，抬高半身缓冲阈值");
+            }
         }
-
-        if (contextAnalysis.lowExitRate >= 0.45) {
-            AIDodgePolicy.roamRadius += 1;
-            AIDodgePolicy.stuckTimeoutMs -= 40;
-            NormalizeDodgePolicyValue(AIDodgePolicy);
-            SaveAIDodgePolicy();
-            actions.push("低出口区域占比高，增大巡逻半径并提前解卡");
-        }
-        if (contextAnalysis.riskyHalfBodyRate >= 0.35) {
-            AIDodgePolicy.halfBodyMinEtaMs += 25;
-            NormalizeDodgePolicyValue(AIDodgePolicy);
-            SaveAIDodgePolicy();
-            actions.push("半身高风险样本偏多，抬高半身缓冲阈值");
+        else {
+            actions.push("专家策略冻结（仅采集，不在线调参）");
         }
 
         this.State.latestDeathSummary = contextAnalysis.dominantReason
@@ -4383,6 +5567,20 @@ var AIDodgeTrainer = {
 
         if (gap <= 0) {
             return null;
+        }
+        if (IsOfflineMLExpertFreezeEnabled()) {
+            return {
+                gap: gap,
+                delta: delta,
+                policyDelta: {
+                    forecastMs: 0,
+                    safeBufferMs: 0,
+                    repathMs: 0,
+                    stuckTimeoutMs: 0,
+                    roamRadius: 0,
+                    halfBodyMinEtaMs: 0
+                }
+            };
         }
 
         before = this.CapturePolicySnapshot();
@@ -4877,6 +6075,9 @@ var AIDodgeTrainer = {
                 + this.Config.stopSuccessThreshold + "即停止；未达到基线+"
                 + this.Config.minIncrementPerRound + "则自动优化并继续重试。");
         }
+        if (IsOfflineMLExpertFreezeEnabled()) {
+            this.AddLog("Offline ML采集模式：专家策略冻结，禁用在线自调参。");
+        }
         if (this.State.currentMatchTargetScore == null && this.State.baselineScore != null) {
             this.State.currentMatchTargetScore = this.State.baselineScore + this.Config.minIncrementPerRound;
             this.State.targetScore = this.State.currentMatchTargetScore;
@@ -4888,6 +6089,9 @@ var AIDodgeTrainer = {
 function StartAIDodgeTraining() {
     var spawn = { X: 1, Y: 1 };
     var monster;
+    RefreshBNBMLConfigFromQuery();
+    BNBMLDatasetCollector.Init();
+    BNBMLRuntime.Init();
     if (AIDodgeTrainer && AIDodgeTrainer.IsRunning) {
         return AIDodgeTrainer;
     }

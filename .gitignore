@@ -109,3 +109,9 @@ jspm_packages
 .node_repl_history
 
 output/*
+
+### Python cache ###
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyc.*

@@ -23,13 +23,7 @@ var Barrier = {
         //宝物
         101: { Url: resPrefix + "Pic/Gift1.png", Offset: new Size(1, 2 + 10) },
         102: { Url: resPrefix + "Pic/Gift2.png", Offset: new Size(1, 2 + 10) },
-        103: { Url: resPrefix + "Pic/Gift3.png", Offset: new Size(1, 2 + 10) },
-        104: { Url: resPrefix + "Pic/Gift4.png", Offset: new Size(1, 2 + 10) },
-        105: { Url: resPrefix + "Pic/Gift5.png", Offset: new Size(1, 2 + 10) },
-        106: { Url: resPrefix + "Pic/Gift6.png", Offset: new Size(1, 2 + 10) },
-        107: { Url: resPrefix + "Pic/Gift7.png", Offset: new Size(-2, -1 + 10) },
-        108: { Url: resPrefix + "Pic/Gift8.png", Offset: new Size(-2, -1 + 10) },
-        109: { Url: resPrefix + "Pic/Gift9.png", Offset: new Size(0, 0 + 10) }
+        103: { Url: resPrefix + "Pic/Gift3.png", Offset: new Size(1, 2 + 10) }
     },
 
     //创建对象
@@ -49,18 +43,7 @@ var Barrier = {
             barrierunit.Position = position;
 
             if (num > 100) {
-                if (num == 107) {
-                    barrierunit.Size = new Size(36, 38);
-                }
-                else if (num == 108) {
-                    barrierunit.Size = new Size(36, 41);
-                }
-                else if (num == 109) {
-                    barrierunit.Size = new Size(40, 41);
-                }
-                else {
-                    barrierunit.Size = new Size(42, 45);
-                }
+                barrierunit.Size = new Size(42, 45);
                 var picnumber = 0;
                 var binterval = setInterval(function () {
                     if (barrierunit.Visible) {
@@ -77,7 +60,8 @@ var Barrier = {
                 var shadowobject = new Bitmap(resPrefix + "Pic/ShadowGift.png");
                 shadowobject.Size = new Size(18, 9);
                 shadowobject.Position = new Point(20 + 40 * x + 20 - 9, 40 + 40 * y + 20 + 8);
-                shadowobject.ZIndex = zindex - 1;
+                // 防止边界道具阴影产生负层级，触发渲染层级循环异常
+                shadowobject.ZIndex = zindex > 0 ? zindex - 1 : 0;
 
                 var positonnumber = 0;
                 //默认向上
@@ -122,12 +106,12 @@ var Barrier = {
         if (b == null) {
             return;
         }
-        if ((b.No > 0 && b.No < 3) || b.No === 8 || b.No > 100) {
+        if ((b.No > 0 && b.No < 3) || b.No > 100) {
             b.Object.Dispose();
             townBarrierMap[y][x] = 0;
             Barrier.Storage[y][x] = null;
         }
-        else if (b.No == 3) {
+        else if (b.No == 3 || b.No == 8) {
             townBarrierMap[y][x] = CreateRandomGift(); //GiftStorage[y][x];
             b.Object.Dispose();
             //生成宝物
@@ -219,7 +203,7 @@ function DrawBarrierMap(){
     }
 }
 
-var NormalGiftPool = [101, 102, 103, 104, 105, 106];
+var NormalGiftPool = [101, 102, 103];
 
 function CreateRandomGift() {
     var index = Math.floor(Math.random() * NormalGiftPool.length);

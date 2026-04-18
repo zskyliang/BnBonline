@@ -8,14 +8,78 @@ var Direction = {
     Right: 3
 }
 
+var RoleMoveTickMs = 20;
+var RoleMoveTicksPerSecond = 1000 / RoleMoveTickMs;
+
+// 角色平衡配置：统一初始值、增量与上限（玩家与 AI 共用）
+var RoleBalanceConfig = {
+    InitialBubbleCount: 2,
+    InitialSpeedPxPerSec: 150,
+    InitialPower: 2,
+    BubblePerItem: 1,
+    SpeedPerItemPxPerSec: 25,
+    PowerPerItem: 1,
+    MaxBubbleCount: 8,
+    MaxSpeedPxPerSec: 300,
+    MaxPower: 10
+};
+
+function SpeedPxPerSecToMoveStep(speedPxPerSec) {
+    var speed = parseFloat(speedPxPerSec);
+    if (isNaN(speed) || speed < 0) {
+        speed = 0;
+    }
+    return speed / RoleMoveTicksPerSecond;
+}
+
+function MoveStepToSpeedPxPerSec(moveStep) {
+    var step = parseFloat(moveStep);
+    if (isNaN(step) || step < 0) {
+        step = 0;
+    }
+    return step * RoleMoveTicksPerSecond;
+}
+
+function ClampRoleBubbleCount(length) {
+    var normalized = parseInt(length, 10);
+    if (isNaN(normalized)) {
+        normalized = RoleBalanceConfig.InitialBubbleCount;
+    }
+    if (normalized < 1) {
+        normalized = 1;
+    }
+    if (normalized > RoleBalanceConfig.MaxBubbleCount) {
+        normalized = RoleBalanceConfig.MaxBubbleCount;
+    }
+    return normalized;
+}
+
+function ClampRolePower(power) {
+    var normalized = parseInt(power, 10);
+    if (isNaN(normalized)) {
+        normalized = RoleBalanceConfig.InitialPower;
+    }
+    if (normalized < 1) {
+        normalized = 1;
+    }
+    if (normalized > RoleBalanceConfig.MaxPower) {
+        normalized = RoleBalanceConfig.MaxPower;
+    }
+    return normalized;
+}
+
+function GetRoleInitialMoveStep() {
+    return SpeedPxPerSecToMoveStep(RoleBalanceConfig.InitialSpeedPxPerSec);
+}
+
 //角色的属性值
 var RoleConstant = {
     MinMoveStep: 2,
     //最大速度
-    MaxMoveStep: 4,
+    MaxMoveStep: SpeedPxPerSecToMoveStep(RoleBalanceConfig.MaxSpeedPxPerSec),
 
     //泡泡最大强度
-    MaxPaopaoStrong: 10
+    MaxPaopaoStrong: RoleBalanceConfig.MaxPower
 }
 var RolePushBoxHoldMs = 300;
 
@@ -51,7 +115,7 @@ var Role = function(number) {
     this.RawSpeed = 0;
 
     //移动速度
-    this.MoveStep = 1;
+    this.MoveStep = GetRoleInitialMoveStep();
 
     //坐骑类型
     this.MoveHorse = MoveHorseObject.None;
@@ -60,13 +124,13 @@ var Role = function(number) {
     this.IsCanMovePaopao = false;
 
     //连续可放泡泡次数
-    this.CanPaopaoLength = 1;
+    this.CanPaopaoLength = ClampRoleBubbleCount(RoleBalanceConfig.InitialBubbleCount);
 
     //已经放还未爆炸的泡泡数
     this.PaopaoCount = 0;
 
     //泡泡爆炸强度
-    this.PaopaoStrong = 1;
+    this.PaopaoStrong = ClampRolePower(RoleBalanceConfig.InitialPower);
 
     //是否在泡泡中
     this.IsInPaopao = false;
@@ -143,6 +207,10 @@ var Role = function(number) {
         }
         this.RawSpeed = limitedSpeed;
         this.MoveStep = limitedSpeed;
+    }
+
+    this.SetMoveSpeedPxPerSec = function(speedPxPerSec) {
+        this.SetRawSpeed(SpeedPxPerSecToMoveStep(speedPxPerSec));
     }
 
     //角色坐标重新设置
@@ -269,7 +337,7 @@ var Role = function(number) {
                     }
                     break;
             }
-        }, 20);
+        }, RoleMoveTickMs);
     }
     
     //增加移动速度
@@ -283,12 +351,17 @@ var Role = function(number) {
         }
     }
 
+    this.AddMoveSpeedPxPerSec = function(addPxPerSec) {
+        this.AddMoveStep(SpeedPxPerSecToMoveStep(addPxPerSec));
+    }
+
+    this.AddPaopaoLength = function(addNum) {
+        this.CanPaopaoLength = ClampRoleBubbleCount(this.CanPaopaoLength + addNum);
+    }
+
     //增加泡泡强度
     this.AddPaopaoStrong = function(addNum) {
-        this.PaopaoStrong += addNum;
-        if (this.PaopaoStrong > RoleConstant.MaxPaopaoStrong) {
-            this.PaopaoStrong = RoleConstant.MaxPaopaoStrong;
-        }
+        this.PaopaoStrong = ClampRolePower(this.PaopaoStrong + addNum);
     }
 
     //下一个区块是否可以通过
@@ -427,45 +500,17 @@ var Role = function(number) {
                         switch (townBarrierMap[currentMapID.Y][currentMapID.X]) {
                             //加泡泡次数                                         
                             case 101:
-                                this.CanPaopaoLength++;
+                                this.AddPaopaoLength(RoleBalanceConfig.BubblePerItem);
                                 break;
-                            //速度+1                                         
+                            //速度 +25px/s                                         
                             case 102:
-                                this.AddMoveStep(1);
+                                this.AddMoveSpeedPxPerSec(RoleBalanceConfig.SpeedPerItemPxPerSec);
                                 break;
-                            //泡泡强度                                         
+                            //泡泡强度 +1 格                                         
                             case 103:
-                                this.AddPaopaoStrong(1);
+                                this.AddPaopaoStrong(RoleBalanceConfig.PowerPerItem);
                                 break;
-                            //泡泡强度达到最大                                         
-                            case 104:
-                                this.AddPaopaoStrong(RoleConstant.MaxPaopaoStrong);
-                                break;
-                            //速度达到最大                                         
-                            case 105:
-                                this.MoveStep = RoleConstant.MaxMoveStep;
-                                break;
-                            //可以踢泡泡                                         
-                            case 106:
-                                this.IsCanMovePaopao = true;
-                                break;
-                            //可以乘坐，并移动速度快一点                 
-                            case 107:
-                                this.MoveStep = this.RawSpeed + 1;
-                                this.MoveHorse = MoveHorseObject.Owl;
-                                this.Ride();
-                                break;
-                            //可以乘坐但是移动速度很慢                                         
-                            case 108:
-                                this.MoveStep = RoleConstant.MinMoveStep;
-                                this.MoveHorse = MoveHorseObject.Turtle;
-                                this.Ride();
-                                break;
-                            //可以乘坐並且使移动速度变很快，乘坐后无法捡宝物                                         
-                            case 109:
-                                this.MoveStep = RoleConstant.MaxMoveStep;
-                                this.MoveHorse = MoveHorseObject.UFO;
-                                this.Ride();
+                            default:
                                 break;
                         }
                         townBarrierMap[currentMapID.Y][currentMapID.X] = 0;

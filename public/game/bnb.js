@@ -11,6 +11,14 @@ var maxMoveStepInputId = "max-move-step-input";
 var maxMoveStepApplyId = "apply-max-move-step";
 var maxMoveStepHintId = "max-move-step-hint";
 var maxMoveStepConfigBound = false;
+var maxBubbleCountInputId = "max-bubble-count-input";
+var maxBubbleCountApplyId = "apply-max-bubble-count";
+var maxBubbleCountHintId = "max-bubble-count-hint";
+var maxBubbleCountConfigBound = false;
+var maxPowerInputId = "max-power-input";
+var maxPowerApplyId = "apply-max-power";
+var maxPowerHintId = "max-power-hint";
+var maxPowerConfigBound = false;
 var bubbleSkinSelectId = "bubble-skin-select";
 var bubbleSkinHintId = "bubble-skin-hint";
 var bubbleSkinStorageKey = "bnb_player_bubble_skin";
@@ -64,7 +72,7 @@ function EnsureMaxMoveStepConfigDom() {
         label = document.createElement("label");
         label.className = "config-label";
         label.setAttribute("for", maxMoveStepInputId);
-        label.textContent = "人物最大速度";
+        label.textContent = "人物最大速度 (px/s)";
 
         row = document.createElement("div");
         row.className = "config-row";
@@ -73,10 +81,10 @@ function EnsureMaxMoveStepConfigDom() {
         inputNode.id = maxMoveStepInputId;
         inputNode.className = "config-input";
         inputNode.type = "number";
-        inputNode.min = "2";
-        inputNode.max = "12";
-        inputNode.step = "1";
-        inputNode.value = RoleConstant.MaxMoveStep;
+        inputNode.min = "50";
+        inputNode.max = "1000";
+        inputNode.step = "25";
+        inputNode.value = RoleBalanceConfig.MaxSpeedPxPerSec;
 
         applyButton = document.createElement("button");
         applyButton.id = maxMoveStepApplyId;
@@ -87,7 +95,131 @@ function EnsureMaxMoveStepConfigDom() {
         hintNode = document.createElement("div");
         hintNode.id = maxMoveStepHintId;
         hintNode.className = "config-hint";
-        hintNode.textContent = "当前上限：" + RoleConstant.MaxMoveStep;
+        hintNode.textContent = "当前上限：" + RoleBalanceConfig.MaxSpeedPxPerSec + " px/s";
+
+        row.appendChild(inputNode);
+        row.appendChild(applyButton);
+        configBlock.appendChild(label);
+        configBlock.appendChild(row);
+        configBlock.appendChild(hintNode);
+
+        scoreList = document.getElementById("score-list");
+        if (scoreList && scoreList.parentNode === panel) {
+            panel.insertBefore(configBlock, scoreList);
+        }
+        else {
+            panel.appendChild(configBlock);
+        }
+    }
+}
+
+function EnsureMaxBubbleCountConfigDom() {
+    var panel = document.getElementById("match-panel");
+    var inputNode = document.getElementById(maxBubbleCountInputId);
+    var scoreList;
+    var configBlock;
+    var label;
+    var row;
+    var applyButton;
+    var hintNode;
+
+    if (!panel) {
+        return;
+    }
+
+    if (!inputNode) {
+        configBlock = document.createElement("div");
+        configBlock.className = "config-block";
+
+        label = document.createElement("label");
+        label.className = "config-label";
+        label.setAttribute("for", maxBubbleCountInputId);
+        label.textContent = "人物最大水泡数";
+
+        row = document.createElement("div");
+        row.className = "config-row";
+
+        inputNode = document.createElement("input");
+        inputNode.id = maxBubbleCountInputId;
+        inputNode.className = "config-input";
+        inputNode.type = "number";
+        inputNode.min = String(RoleBalanceConfig.InitialBubbleCount);
+        inputNode.max = "20";
+        inputNode.step = "1";
+        inputNode.value = RoleBalanceConfig.MaxBubbleCount;
+
+        applyButton = document.createElement("button");
+        applyButton.id = maxBubbleCountApplyId;
+        applyButton.className = "config-button";
+        applyButton.type = "button";
+        applyButton.textContent = "应用";
+
+        hintNode = document.createElement("div");
+        hintNode.id = maxBubbleCountHintId;
+        hintNode.className = "config-hint";
+        hintNode.textContent = "当前上限：" + RoleBalanceConfig.MaxBubbleCount;
+
+        row.appendChild(inputNode);
+        row.appendChild(applyButton);
+        configBlock.appendChild(label);
+        configBlock.appendChild(row);
+        configBlock.appendChild(hintNode);
+
+        scoreList = document.getElementById("score-list");
+        if (scoreList && scoreList.parentNode === panel) {
+            panel.insertBefore(configBlock, scoreList);
+        }
+        else {
+            panel.appendChild(configBlock);
+        }
+    }
+}
+
+function EnsureMaxPowerConfigDom() {
+    var panel = document.getElementById("match-panel");
+    var inputNode = document.getElementById(maxPowerInputId);
+    var scoreList;
+    var configBlock;
+    var label;
+    var row;
+    var applyButton;
+    var hintNode;
+
+    if (!panel) {
+        return;
+    }
+
+    if (!inputNode) {
+        configBlock = document.createElement("div");
+        configBlock.className = "config-block";
+
+        label = document.createElement("label");
+        label.className = "config-label";
+        label.setAttribute("for", maxPowerInputId);
+        label.textContent = "人物最大威力 (覆盖格)";
+
+        row = document.createElement("div");
+        row.className = "config-row";
+
+        inputNode = document.createElement("input");
+        inputNode.id = maxPowerInputId;
+        inputNode.className = "config-input";
+        inputNode.type = "number";
+        inputNode.min = String(RoleBalanceConfig.InitialPower);
+        inputNode.max = "20";
+        inputNode.step = "1";
+        inputNode.value = RoleBalanceConfig.MaxPower;
+
+        applyButton = document.createElement("button");
+        applyButton.id = maxPowerApplyId;
+        applyButton.className = "config-button";
+        applyButton.type = "button";
+        applyButton.textContent = "应用";
+
+        hintNode = document.createElement("div");
+        hintNode.id = maxPowerHintId;
+        hintNode.className = "config-hint";
+        hintNode.textContent = "当前上限：" + RoleBalanceConfig.MaxPower + " 格";
 
         row.appendChild(inputNode);
         row.appendChild(applyButton);
@@ -205,19 +337,19 @@ function ReadStoredPlayerBubbleSkin() {
 }
 
 function NormalizeMaxMoveStep(rawValue) {
-    var maxMoveStep = parseInt(rawValue, 10);
+    var maxSpeedPxPerSec = parseInt(rawValue, 10);
 
-    if (isNaN(maxMoveStep)) {
-        maxMoveStep = RoleConstant.MaxMoveStep;
+    if (isNaN(maxSpeedPxPerSec)) {
+        maxSpeedPxPerSec = RoleBalanceConfig.MaxSpeedPxPerSec;
     }
-    if (maxMoveStep < RoleConstant.MinMoveStep) {
-        maxMoveStep = RoleConstant.MinMoveStep;
+    if (maxSpeedPxPerSec < RoleBalanceConfig.InitialSpeedPxPerSec) {
+        maxSpeedPxPerSec = RoleBalanceConfig.InitialSpeedPxPerSec;
     }
-    if (maxMoveStep > 12) {
-        maxMoveStep = 12;
+    if (maxSpeedPxPerSec > 1000) {
+        maxSpeedPxPerSec = 1000;
     }
 
-    return maxMoveStep;
+    return maxSpeedPxPerSec;
 }
 
 function SyncRoleSpeedByMaxMoveStep() {
@@ -242,16 +374,18 @@ function SyncRoleSpeedByMaxMoveStep() {
 function SetRoleMaxMoveStep(nextMaxMoveStep) {
     var inputNode = document.getElementById(maxMoveStepInputId);
     var hintNode = document.getElementById(maxMoveStepHintId);
-    var normalizedMaxMoveStep = NormalizeMaxMoveStep(nextMaxMoveStep);
+    var normalizedMaxSpeedPxPerSec = NormalizeMaxMoveStep(nextMaxMoveStep);
+    var normalizedMaxMoveStep = SpeedPxPerSecToMoveStep(normalizedMaxSpeedPxPerSec);
 
+    RoleBalanceConfig.MaxSpeedPxPerSec = normalizedMaxSpeedPxPerSec;
     RoleConstant.MaxMoveStep = normalizedMaxMoveStep;
     SyncRoleSpeedByMaxMoveStep();
 
     if (inputNode) {
-        inputNode.value = normalizedMaxMoveStep;
+        inputNode.value = normalizedMaxSpeedPxPerSec;
     }
     if (hintNode) {
-        hintNode.textContent = "当前上限：" + normalizedMaxMoveStep;
+        hintNode.textContent = "当前上限：" + normalizedMaxSpeedPxPerSec + " px/s";
     }
 }
 
@@ -281,7 +415,149 @@ function InitRoleMaxMoveStepConfig() {
         maxMoveStepConfigBound = true;
     }
 
-    SetRoleMaxMoveStep(inputNode.value || RoleConstant.MaxMoveStep);
+    SetRoleMaxMoveStep(RoleBalanceConfig.MaxSpeedPxPerSec);
+}
+
+function NormalizeMaxBubbleCount(rawValue) {
+    var maxBubbleCount = parseInt(rawValue, 10);
+    if (isNaN(maxBubbleCount)) {
+        maxBubbleCount = RoleBalanceConfig.MaxBubbleCount;
+    }
+    if (maxBubbleCount < RoleBalanceConfig.InitialBubbleCount) {
+        maxBubbleCount = RoleBalanceConfig.InitialBubbleCount;
+    }
+    if (maxBubbleCount > 20) {
+        maxBubbleCount = 20;
+    }
+    return maxBubbleCount;
+}
+
+function SyncRoleBubbleCountByMax() {
+    for (var i = 0; i < RoleStorage.length; i++) {
+        var role = RoleStorage[i];
+        if (!role) {
+            continue;
+        }
+        role.CanPaopaoLength = ClampRoleBubbleCount(role.CanPaopaoLength);
+    }
+}
+
+function SetRoleMaxBubbleCount(nextMaxBubbleCount) {
+    var inputNode = document.getElementById(maxBubbleCountInputId);
+    var hintNode = document.getElementById(maxBubbleCountHintId);
+    var normalizedMaxBubbleCount = NormalizeMaxBubbleCount(nextMaxBubbleCount);
+
+    RoleBalanceConfig.MaxBubbleCount = normalizedMaxBubbleCount;
+    if (typeof MonsterMaxPaopaoLength === "number") {
+        MonsterMaxPaopaoLength = normalizedMaxBubbleCount;
+    }
+    SyncRoleBubbleCountByMax();
+
+    if (inputNode) {
+        inputNode.value = normalizedMaxBubbleCount;
+    }
+    if (hintNode) {
+        hintNode.textContent = "当前上限：" + normalizedMaxBubbleCount;
+    }
+}
+
+function InitRoleMaxBubbleCountConfig() {
+    EnsureMaxBubbleCountConfigDom();
+
+    var inputNode = document.getElementById(maxBubbleCountInputId);
+    var applyButton = document.getElementById(maxBubbleCountApplyId);
+
+    if (!inputNode || !applyButton) {
+        return;
+    }
+
+    if (!maxBubbleCountConfigBound) {
+        applyButton.addEventListener("click", function () {
+            SetRoleMaxBubbleCount(inputNode.value);
+        });
+
+        inputNode.addEventListener("keydown", function (e) {
+            var key = window.event ? e.keyCode : e.which;
+            if (key === 13) {
+                e.preventDefault();
+                SetRoleMaxBubbleCount(inputNode.value);
+            }
+        });
+
+        maxBubbleCountConfigBound = true;
+    }
+
+    SetRoleMaxBubbleCount(RoleBalanceConfig.MaxBubbleCount);
+}
+
+function NormalizeMaxPower(rawValue) {
+    var maxPower = parseInt(rawValue, 10);
+    if (isNaN(maxPower)) {
+        maxPower = RoleBalanceConfig.MaxPower;
+    }
+    if (maxPower < RoleBalanceConfig.InitialPower) {
+        maxPower = RoleBalanceConfig.InitialPower;
+    }
+    if (maxPower > 20) {
+        maxPower = 20;
+    }
+    return maxPower;
+}
+
+function SyncRolePowerByMax() {
+    for (var i = 0; i < RoleStorage.length; i++) {
+        var role = RoleStorage[i];
+        if (!role) {
+            continue;
+        }
+        role.PaopaoStrong = ClampRolePower(role.PaopaoStrong);
+    }
+}
+
+function SetRoleMaxPower(nextMaxPower) {
+    var inputNode = document.getElementById(maxPowerInputId);
+    var hintNode = document.getElementById(maxPowerHintId);
+    var normalizedMaxPower = NormalizeMaxPower(nextMaxPower);
+
+    RoleBalanceConfig.MaxPower = normalizedMaxPower;
+    RoleConstant.MaxPaopaoStrong = normalizedMaxPower;
+    SyncRolePowerByMax();
+
+    if (inputNode) {
+        inputNode.value = normalizedMaxPower;
+    }
+    if (hintNode) {
+        hintNode.textContent = "当前上限：" + normalizedMaxPower + " 格";
+    }
+}
+
+function InitRoleMaxPowerConfig() {
+    EnsureMaxPowerConfigDom();
+
+    var inputNode = document.getElementById(maxPowerInputId);
+    var applyButton = document.getElementById(maxPowerApplyId);
+
+    if (!inputNode || !applyButton) {
+        return;
+    }
+
+    if (!maxPowerConfigBound) {
+        applyButton.addEventListener("click", function () {
+            SetRoleMaxPower(inputNode.value);
+        });
+
+        inputNode.addEventListener("keydown", function (e) {
+            var key = window.event ? e.keyCode : e.which;
+            if (key === 13) {
+                e.preventDefault();
+                SetRoleMaxPower(inputNode.value);
+            }
+        });
+
+        maxPowerConfigBound = true;
+    }
+
+    SetRoleMaxPower(RoleBalanceConfig.MaxPower);
 }
 
 function InitPlayerBubbleSkinConfig() {
@@ -560,6 +836,8 @@ function InitGame(){
     InitGameMapConfig();
     InitAIEnemyCountConfig();
     InitRoleMaxMoveStepConfig();
+    InitRoleMaxBubbleCountConfig();
+    InitRoleMaxPowerConfig();
     InitPlayerBubbleSkinConfig();
 
     if (typeof ReplaceTreeAndHouseWithBoxes === "function") {
@@ -652,9 +930,9 @@ function CreateRole(number, x, y){
         role1.AniSize = new Size(56, 70);
         role1.DieSize = new Size(56, 98);
     }
-    role1.SetRawSpeed(4);
-    role1.PaopaoStrong = 2;
-    role1.CanPaopaoLength = 2;
+    role1.SetMoveSpeedPxPerSec(RoleBalanceConfig.InitialSpeedPxPerSec);
+    role1.PaopaoStrong = ClampRolePower(RoleBalanceConfig.InitialPower);
+    role1.CanPaopaoLength = ClampRoleBubbleCount(RoleBalanceConfig.InitialBubbleCount);
     role1.SetToMap(x, y);
 
     role1.isKeyup = false;
@@ -923,6 +1201,10 @@ function StartSinglePlayerGame(monsterCount) {
     var fighters;
     var playerSpawn = { X: 0, Y: 0 };
     var resolvedMonsterCount;
+
+    if (typeof window !== "undefined" && typeof window.BNBMLRefreshConfig === "function") {
+        window.BNBMLRefreshConfig();
+    }
 
     if (typeof GetStoredGameMapId === "function" && typeof SetCurrentGameMap === "function") {
         SetCurrentGameMap(GetStoredGameMapId());

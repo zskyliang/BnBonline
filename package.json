@@ -5,7 +5,11 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "collect:bc": "node scripts/collect-dodge-dataset.js",
+    "eval:ml": "node scripts/eval-ml-dodge.js",
+    "train:bc:v1_1": "node scripts/train-bc-iterative.js",
+    "sprint:99": "node scripts/run-99-sprint.js"
   },
   "author": "SineYuan",
   "license": "ISC",
