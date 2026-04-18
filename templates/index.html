@@ -151,13 +151,53 @@
                 </div>
                 <div id="max-move-step-hint" class="config-hint">当前上限：4</div>
             </div>
+            <div class="config-block">
+                <label for="bubble-skin-select" class="config-label">玩家水泡皮肤</label>
+                <div class="config-row">
+                    <select id="bubble-skin-select" class="config-input">
+                        <option value="football">足球</option>
+                        <option value="basketball">篮球</option>
+                    </select>
+                </div>
+                <div id="bubble-skin-hint" class="config-hint">当前皮肤：足球</div>
+            </div>
+            <div class="config-block">
+                <label for="map-select" class="config-label">游戏地图</label>
+                <div class="config-row">
+                    <select id="map-select" class="config-input"></select>
+                </div>
+                <div id="map-select-hint" class="config-hint">当前地图：当前地图（经典）</div>
+            </div>
+            <div class="config-block">
+                <label for="ai-enemy-count-select" class="config-label">AI敌人数</label>
+                <div class="config-row">
+                    <select id="ai-enemy-count-select" class="config-input">
+                        <option value="0">0</option>
+                        <option value="1">1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                        <option value="4">4</option>
+                    </select>
+                </div>
+                <div id="ai-enemy-count-hint" class="config-hint">当前敌人数：3</div>
+            </div>
             <ul id="score-list" class="score-list"></ul>
         </aside>
     </main>
 
     <script type="text/javascript">
         window.addEventListener("load", function () {
-            StartSinglePlayerGame(3);
+            var query = new URLSearchParams(window.location.search);
+            if (query.get("mode") === "battle") {
+                StartSinglePlayerGame();
+            }
+            else if (query.get("autostart") === "0") {
+                // 由外部训练脚本控制启动时机（用于注入恢复上下文）
+                return;
+            }
+            else {
+                StartAIDodgeTraining();
+            }
         });
     </script>
 </body>

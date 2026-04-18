@@ -1,5 +1,7 @@
 var express = require('express'),
     bodyParser = require('body-parser');
+var fs = require('fs');
+var path = require('path');
 var app = express();
 var server = require('http').Server(app);
 var io = require('socket.io')(server);
@@ -17,9 +19,83 @@ app.use(bodyParser.urlencoded({     // to support URL-encoded bodies
 }));
 
 var rooms = {};
+var TRAINING_OUTPUT_DIR = path.join(__dirname, 'output', 'web-game');
+var TRAINING_LOCK_FILE = path.join(TRAINING_OUTPUT_DIR, 'training-runtime.lock.json');
+var TRAINING_STATE_FILE = path.join(TRAINING_OUTPUT_DIR, 'training-runtime-state.json');
+var TRAINING_FRAME_FILE = path.join(TRAINING_OUTPUT_DIR, 'training-iter5-live.png');
+var TRAINING_LOCK_STALE_MS = 15000;
+
+function safeReadJSON(filepath) {
+    try {
+        if (!fs.existsSync(filepath)) {
+            return null;
+        }
+        return JSON.parse(fs.readFileSync(filepath, 'utf8'));
+    } catch (err) {
+        return null;
+    }
+}
+
+function readTrainingLock() {
+    var lock = safeReadJSON(TRAINING_LOCK_FILE) || { active: false };
+    var now = Date.now();
+    var heartbeat = typeof lock.heartbeat === 'number' ? lock.heartbeat : 0;
+    var age = heartbeat > 0 ? (now - heartbeat) : null;
+    var alive = false;
+    if (typeof lock.pid === 'number' && lock.pid > 0) {
+        try {
+            process.kill(lock.pid, 0);
+            alive = true;
+        } catch (err) {
+            alive = false;
+        }
+    }
+    lock.pidAlive = alive;
+    lock.heartbeatAgeMs = age;
+    lock.stale = !!(age != null && age > TRAINING_LOCK_STALE_MS);
+    lock.active = !!lock.active && alive && !lock.stale;
+    return lock;
+}
 
 app.get('/', function (req, res) {
+    var lock;
+    if (req.query && (req.query.train === '1' || req.query.mode === 'battle')) {
+        res.render('index');
+        return;
+    }
+    lock = readTrainingLock();
+    if (lock && lock.active) {
+        res.redirect('/viewer');
+        return;
+    }
     res.render('index');
+});
+
+app.get('/viewer', function(req, res) {
+    res.render('viewer');
+});
+
+app.get('/api/training/status', function(req, res) {
+    var lock = readTrainingLock();
+    var raw = safeReadJSON(TRAINING_STATE_FILE) || {};
+    var state = raw && raw.state ? raw.state : raw;
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.json({
+        ts: Date.now(),
+        active: !!lock.active,
+        lock: lock,
+        state: state,
+        raw: raw
+    });
+});
+
+app.get('/api/training/frame', function(req, res) {
+    if (!fs.existsSync(TRAINING_FRAME_FILE)) {
+        res.status(404).json({ ok: false, error: 'frame_not_found' });
+        return;
+    }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.sendFile(TRAINING_FRAME_FILE);
 });
 
 io.on('connection', function (socket) {

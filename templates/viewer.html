@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI 训练实时观战</title>
+    <style>
+        body {
+            margin: 0;
+            background: #10161f;
+            color: #e6efff;
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        .page {
+            max-width: 1320px;
+            margin: 0 auto;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+        .header {
+            margin-bottom: 12px;
+            font-size: 20px;
+            font-weight: 700;
+        }
+        .sub {
+            margin-bottom: 14px;
+            color: #9fb3d9;
+            font-size: 13px;
+        }
+        .layout {
+            display: flex;
+            gap: 14px;
+            align-items: flex-start;
+        }
+        .screen {
+            flex: 1;
+            min-width: 520px;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: #000;
+        }
+        .screen img {
+            width: 100%;
+            display: block;
+        }
+        .panel {
+            width: 360px;
+            max-width: 42vw;
+            border-radius: 10px;
+            background: rgba(8, 12, 22, 0.94);
+            border: 1px solid rgba(255,255,255,0.14);
+            padding: 12px;
+            box-sizing: border-box;
+        }
+        .k {
+            color: #9bb2dd;
+            font-size: 12px;
+        }
+        .v {
+            color: #fff;
+            font-size: 14px;
+            margin: 2px 0 10px 0;
+            line-height: 1.4;
+        }
+        .log-title {
+            margin-top: 8px;
+            margin-bottom: 6px;
+            font-size: 13px;
+            color: #c7d9ff;
+        }
+        .logs {
+            margin: 0;
+            padding-left: 18px;
+            max-height: 260px;
+            overflow: auto;
+            font-size: 12px;
+            color: #d8e6ff;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+<main class="page">
+    <div class="header">AI 躲泡训练实时观战</div>
+    <div class="sub" id="heartbeat">连接中...</div>
+    <section class="layout">
+        <div class="screen">
+            <img id="live-frame" alt="训练实时画面" src="/api/training/frame">
+        </div>
+        <aside class="panel">
+            <div class="k">训练状态</div>
+            <div class="v" id="active">-</div>
+            <div class="k">轮次 / 尝试</div>
+            <div class="v" id="round">-</div>
+            <div class="k">当前成绩</div>
+            <div class="v" id="score">-</div>
+            <div class="k">基线 / 目标</div>
+            <div class="v" id="target">-</div>
+            <div class="k">最新复盘</div>
+            <div class="v" id="review">-</div>
+            <div class="k">最新经验</div>
+            <div class="v" id="lesson">-</div>
+            <div class="k">最新失败画像</div>
+            <div class="v" id="death">-</div>
+            <div class="log-title">最近日志</div>
+            <ol class="logs" id="logs"></ol>
+        </aside>
+    </section>
+</main>
+
+<script>
+(function() {
+    var frameEl = document.getElementById("live-frame");
+    var beatEl = document.getElementById("heartbeat");
+    var activeEl = document.getElementById("active");
+    var roundEl = document.getElementById("round");
+    var scoreEl = document.getElementById("score");
+    var targetEl = document.getElementById("target");
+    var reviewEl = document.getElementById("review");
+    var lessonEl = document.getElementById("lesson");
+    var deathEl = document.getElementById("death");
+    var logsEl = document.getElementById("logs");
+    var frameLoading = false;
+    var FRAME_REFRESH_MS = 33;
+    var STATUS_REFRESH_MS = 1000;
+
+    function text(el, value) {
+        if (!el) return;
+        el.textContent = value == null || value === "" ? "-" : String(value);
+    }
+
+    function renderLogs(logs) {
+        var list = Array.isArray(logs) ? logs : [];
+        var i;
+        var start = Math.max(0, list.length - 8);
+        logsEl.innerHTML = "";
+        for (i = list.length - 1; i >= start; i--) {
+            var li = document.createElement("li");
+            li.textContent = list[i];
+            logsEl.appendChild(li);
+        }
+    }
+
+    function refreshFrame() {
+        if (frameLoading) {
+            return;
+        }
+        frameLoading = true;
+        frameEl.onload = function() { frameLoading = false; };
+        frameEl.onerror = function() { frameLoading = false; };
+        frameEl.src = "/api/training/frame?t=" + Date.now();
+    }
+
+    async function pollStatus() {
+        var res;
+        var data;
+        var stRaw;
+        var st;
+        try {
+            res = await fetch("/api/training/status?t=" + Date.now(), { cache: "no-store" });
+            data = await res.json();
+            stRaw = data && data.state ? data.state : {};
+            st = stRaw && stRaw.state ? stRaw.state : stRaw;
+            text(beatEl, "最近更新：" + new Date().toLocaleTimeString() + "｜会话 "
+                + ((data.lock && data.lock.sessionId) ? data.lock.sessionId : "none"));
+            text(activeEl, data.active
+                ? "训练中"
+                : ("未训练/已停止" + (st.stopReason ? ("（" + st.stopReason + "）") : "")));
+            text(roundEl, "第 " + (st.matchIndex || 0) + " 轮 / 尝试 " + (st.matchAttempt || 0));
+            text(scoreEl, "躲泡 " + (st.matchScore || 0) + "｜被炸 " + (st.matchDeaths || 0)
+                + "｜总尝试 " + (st.totalAttempts || 0));
+            text(targetEl, "基线 " + (st.baselineScore == null ? "na" : st.baselineScore)
+                + "｜目标 " + (st.targetScore == null ? "na" : st.targetScore));
+            text(reviewEl, st.latestReview && st.latestReview.dominantReason
+                ? ("主因=" + st.latestReview.dominantReason + "，成功=" + (st.latestReview.successCount || 0))
+                : "暂无");
+            text(lessonEl, st.latestLesson || "暂无");
+            text(deathEl, st.latestDeathSummary || "暂无");
+            renderLogs(st.logsTail || stRaw.logsTail || []);
+        } catch (err) {
+            text(beatEl, "状态拉取失败：" + (err && err.message ? err.message : err));
+        }
+    }
+
+    pollStatus();
+    refreshFrame();
+    setInterval(pollStatus, STATUS_REFRESH_MS);
+    setInterval(refreshFrame, FRAME_REFRESH_MS);
+})();
+</script>
+</body>
+</html>

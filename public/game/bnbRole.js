@@ -17,6 +17,7 @@ var RoleConstant = {
     //泡泡最大强度
     MaxPaopaoStrong: 10
 }
+var RolePushBoxHoldMs = 300;
 
 var RoleStorage = [];
 
@@ -85,6 +86,20 @@ var Role = function(number) {
     //半身接触爆炸水柱的时间记录（毫秒时间戳），任意两次半身命中在窗口内即致死
     this.LastHalfHitTime = 0;
 
+    //连续处于爆炸非安全区的帧计数（每帧检测）
+    this.ExplosionUnsafeFrameCount = 0;
+
+    //最近一次所在非安全区对应的攻击者
+    this.LastUnsafeExplosionAttacker = null;
+
+    //最近一次命中的爆炸事件ID（用于训练统计）
+    this.LastUnsafeExplosionEventId = "";
+    this.LastUnsafeExplosionEventIds = [];
+    this.LastUnsafeExplosionMapNo = -1;
+
+    //被炸回调（仅用于观察/训练，不参与规则判定）
+    this.OnBombed = function() {};
+
     //困泡状态中的大泡泡对象
     this.TrapBubbleObject = null;
 
@@ -92,6 +107,15 @@ var Role = function(number) {
     this.TrapFloatInterval = 0;
     this.TrapTouchInterval = 0;
     this.TrapDieTimeout = 0;
+
+    //推箱子蓄力：同一方向持续推动至少 RolePushBoxHoldMs 才会位移
+    this.PushBoxHoldKey = "";
+    this.PushBoxHoldStartAt = 0;
+
+    this.ResetPushBoxHold = function() {
+        this.PushBoxHoldKey = "";
+        this.PushBoxHoldStartAt = 0;
+    }
 
     //坐骑对象
     this.RideHorseObject = null;
@@ -271,6 +295,8 @@ var Role = function(number) {
     this.IsCanMoveNext = function(diretion) {
         var currentMapID = FindMapID(this.CenterPoint());
         var nextmapID = null;
+        var currentNo;
+        var currentPassable;
         switch (diretion) {
             case Direction.Up:
                 nextmapID = currentMapID.Y - 1;
@@ -285,7 +311,12 @@ var Role = function(number) {
                 nextmapID = currentMapID.X + 1;
                 break;
         }
-        return nextmapID != null && (townBarrierMap[currentMapID.Y][currentMapID.X] == 0 || townBarrierMap[currentMapID.Y][currentMapID.X] > 100);
+        currentNo = townBarrierMap[currentMapID.Y][currentMapID.X];
+        currentPassable = currentNo == 0 || currentNo > 100;
+        if (!currentPassable && typeof IsWindmillFloorPassByCanvasPoint === "function") {
+            currentPassable = IsWindmillFloorPassByCanvasPoint(currentMapID, this.CenterPoint());
+        }
+        return nextmapID != null && currentPassable;
     }
 
     //坐标所属区块是否可以通过
@@ -296,24 +327,39 @@ var Role = function(number) {
         //坐标范围
         if (point.X >= 0 && point.Y >= 0 && point.X < 600 && point.Y < 520) {
             var currentMapID = this.CurrentMapID();
+            var nextNo = townBarrierMap[nextmap.Y][nextmap.X];
+            var mapBlocked;
+            var shouldUseFrontZIndex = false;
             
-            if(townBarrierMap[nextmap.Y][nextmap.X] == 100 && currentMapID.X == nextmap.X && currentMapID.Y == nextmap.Y){
+            if(nextNo == 100 && currentMapID.X == nextmap.X && currentMapID.Y == nextmap.Y){
                 return true;
             }
 
             var result = false;
-            if (this.MoveHorse == MoveHorseObject.UFO) {
-                //飞碟可以飞越能炸掉的障碍物
-                result = townBarrierMap[nextmap.Y][nextmap.X] <= 0 || townBarrierMap[nextmap.Y][nextmap.X] > 100 || (townBarrierMap[nextmap.Y][nextmap.X] > 0 && townBarrierMap[nextmap.Y][nextmap.X] <= 3);
+            if (nextNo == 100) {
+                // 只能穿过自己脚下的泡泡，其他泡泡格不可通过
+                result = false;
             }
             else {
-                result = townBarrierMap[nextmap.Y][nextmap.X] <= 0 || townBarrierMap[nextmap.Y][nextmap.X] > 100;
+                mapBlocked = typeof IsMapBarrierBlockingAtCanvasPoint === "function"
+                    ? IsMapBarrierBlockingAtCanvasPoint(nextNo, nextmap, point)
+                    : (nextNo > 0 && nextNo < 100);
+
+                if (this.MoveHorse == MoveHorseObject.UFO) {
+                    //飞碟可以飞越能炸掉的障碍物
+                    result = !mapBlocked || nextNo == 3 || nextNo == 8;
+                }
+                else {
+                    result = !mapBlocked;
+                }
             }
 
-            // 推箱子：前方是箱子且前前方无障碍时，允许推动
+            // 推箱子：需要对同一箱子同一方向持续推动一段时间才会位移
             if (!result && this.MoveHorse != MoveHorseObject.UFO && townBarrierMap[nextmap.Y][nextmap.X] == 3) {
                 var mapPoint = this.MapPoint();
                 var aligned = true;
+                var holdKey;
+                var now;
                 if (this.Direction == Direction.Up || this.Direction == Direction.Down) {
                     aligned = Math.abs((mapPoint.X % 40) - 20) <= 2;
                 }
@@ -322,8 +368,25 @@ var Role = function(number) {
                 }
 
                 if (aligned) {
-                    result = Barrier.PushBox(nextmap.X, nextmap.Y, this.Direction);
+                    holdKey = nextmap.X + "_" + nextmap.Y + "_" + this.Direction;
+                    now = Date.now();
+                    if (this.PushBoxHoldKey != holdKey) {
+                        this.PushBoxHoldKey = holdKey;
+                        this.PushBoxHoldStartAt = now;
+                    }
+                    if (now - this.PushBoxHoldStartAt >= RolePushBoxHoldMs) {
+                        result = Barrier.PushBox(nextmap.X, nextmap.Y, this.Direction);
+                        if (result) {
+                            this.ResetPushBoxHold();
+                        }
+                    }
                 }
+                else {
+                    this.ResetPushBoxHold();
+                }
+            }
+            else {
+                this.ResetPushBoxHold();
             }
 
             if (result) {
@@ -332,6 +395,26 @@ var Role = function(number) {
                 this.Object.ZIndex = zindex * 2 + 2;
                 if (this.MoveHorse == MoveHorseObject.UFO) {
                     this.Object.ZIndex += 3;
+                }
+                // 仍在泡泡所在格子时，角色必须始终显示在泡泡前面
+                if (townBarrierMap[currentMapID.Y][currentMapID.X] == 100
+                    && typeof PaopaoArray !== "undefined"
+                    && PaopaoArray[currentMapID.Y]
+                    && PaopaoArray[currentMapID.Y][currentMapID.X]
+                    && PaopaoArray[currentMapID.Y][currentMapID.X].Object
+                    && this.Object.ZIndex <= PaopaoArray[currentMapID.Y][currentMapID.X].Object.ZIndex) {
+                    this.Object.ZIndex = PaopaoArray[currentMapID.Y][currentMapID.X].Object.ZIndex + 1;
+                }
+
+                if (typeof IsWindmillFloorPassByCanvasPoint === "function") {
+                    shouldUseFrontZIndex = IsWindmillFloorPassByCanvasPoint(nextmap, point)
+                        || IsWindmillFloorPassByCanvasPoint(currentMapID, this.CenterPoint());
+                }
+                if (shouldUseFrontZIndex) {
+                    var frontZ = typeof GetWindmillFrontRoleZIndex === "function" ? GetWindmillFrontRoleZIndex() : 95;
+                    if (this.Object.ZIndex < frontZ) {
+                        this.Object.ZIndex = frontZ;
+                    }
                 }
 
                 if (this.MoveHorse != MoveHorseObject.UFO) {
@@ -398,6 +481,7 @@ var Role = function(number) {
     this.Stop = function() {
         clearInterval(animateInterval);
         clearInterval(moveInterval);
+        this.ResetPushBoxHold();
         if (!this.IsInPaopao) {
             if (this.MoveHorse != MoveHorseObject.None) {
                 this.Object.StartPoint = new Point(this.Object.Size.Width * this.Direction, 0);
@@ -468,8 +552,19 @@ var Role = function(number) {
                 && currentMapID != null
                 && currentMapID.X == lefttopmapID.X
                 && currentMapID.Y == lefttopmapID.Y;
+            var isBlocking = false;
 
-            if (!(unitNo > 0 && (unitNo < 100 || (unitNo == 100 && !isCurrentBubbleTile)))) {
+            if (unitNo == 100) {
+                isBlocking = !isCurrentBubbleTile;
+            }
+            else if (typeof IsMapBarrierBlockingAtRelativePoint === "function") {
+                isBlocking = IsMapBarrierBlockingAtRelativePoint(unitNo, lefttopmapID, newPoint);
+            }
+            else {
+                isBlocking = unitNo > 0 && unitNo < 100;
+            }
+
+            if (!isBlocking) {
                 return;
             }
 
@@ -511,7 +606,7 @@ Role.prototype.PaoPao = function() {
 }
 
 //角色被炸到
-Role.prototype.Bomb = function(attacker){
+Role.prototype.Bomb = function(attacker, forceTrap){
     if (this.DismountProtectionUntil > Date.now()) {
         return;
     }
@@ -523,8 +618,17 @@ Role.prototype.Bomb = function(attacker){
         if (attacker != null) {
             this.LastAttacker = attacker;
         }
+        if (typeof this.OnBombed === "function") {
+            this.OnBombed(this, attacker, !!forceTrap);
+        }
         if(this.MoveHorse != MoveHorseObject.None){
-            this.OutRide(true);
+            if (forceTrap) {
+                this.OutRide(false);
+                this.InPaoPao();
+            }
+            else {
+                this.OutRide(true);
+            }
         }
         else{
             this.InPaoPao();
@@ -533,53 +637,96 @@ Role.prototype.Bomb = function(attacker){
 }
 
 Role.prototype.IsExplosionHit = function(mapid) {
-    var mapXY = GetMapPointXY(mapid);
-    var blastCenterX = mapXY.X * 40 + 20;
-    var blastCenterY = mapXY.Y * 40 + 20;
-    var roleCenter = this.MapPoint();
-    var hitCore = 9;
-    var axisBand = 6;
-    var halfReach = 24;
-    var halfWindowMs = 300;
-    var dx = blastCenterX - roleCenter.X;
-    var dy = blastCenterY - roleCenter.Y;
-    var adx = Math.abs(dx);
-    var ady = Math.abs(dy);
-    var now = Date.now();
+    var roleMapID = this.CurrentMapID();
+    if (!roleMapID) {
+        return false;
+    }
+    return roleMapID.Y * 15 + roleMapID.X == mapid;
+}
 
-    // 核心命中：角色中心与爆炸中心足够近，直接致死
-    if (adx <= hitCore && ady <= hitCore) {
-        this.LastHalfHitTime = 0;
-        return true;
+Role.prototype.GetFootMapIDPair = function() {
+    var mapPoint = this.MapPoint();
+    // 脚点采样略低于中心但不压在格子分界线上，避免横向移动时误判到下一行
+    var footSampleYOffset = 16;
+    var footSampleXOffset = 12;
+    var leftFootMapID = GetMapIDByRelativePoint(mapPoint.X - footSampleXOffset, mapPoint.Y + footSampleYOffset);
+    var rightFootMapID = GetMapIDByRelativePoint(mapPoint.X + footSampleXOffset, mapPoint.Y + footSampleYOffset);
+
+    return {
+        Left: leftFootMapID,
+        Right: rightFootMapID
+    };
+}
+
+Role.prototype.ResetExplosionUnsafeFrameCount = function() {
+    this.ExplosionUnsafeFrameCount = 0;
+    this.LastUnsafeExplosionAttacker = null;
+    this.LastUnsafeExplosionEventId = "";
+    this.LastUnsafeExplosionEventIds = [];
+    this.LastUnsafeExplosionMapNo = -1;
+}
+
+Role.prototype.ResolveExplosionUnsafeState = function(unsafeMapLookup, unsafeAttackerLookup, unsafeEventLookup, unsafeEventListLookup) {
+    var feet = this.GetFootMapIDPair();
+    var leftMapNo = feet.Left ? feet.Left.Y * 15 + feet.Left.X : -1;
+    var rightMapNo = feet.Right ? feet.Right.Y * 15 + feet.Right.X : -1;
+    var leftUnsafe = leftMapNo >= 0 && !!unsafeMapLookup[leftMapNo];
+    var rightUnsafe = rightMapNo >= 0 && !!unsafeMapLookup[rightMapNo];
+    var attacker = null;
+    var eventId = "";
+    var eventIds = [];
+    var leftEventIds = unsafeEventListLookup && unsafeEventListLookup[leftMapNo] ? unsafeEventListLookup[leftMapNo] : [];
+    var rightEventIds = unsafeEventListLookup && unsafeEventListLookup[rightMapNo] ? unsafeEventListLookup[rightMapNo] : [];
+
+    // 半身安全：只有单脚在非安全区时，整体视为安全
+    if (!(leftUnsafe && rightUnsafe)) {
+        return {
+            IsUnsafe: false,
+            Attacker: null,
+            LeftUnsafe: leftUnsafe,
+            RightUnsafe: rightUnsafe,
+            LeftMapNo: leftMapNo,
+            RightMapNo: rightMapNo,
+            EventId: "",
+            EventIds: []
+        };
     }
 
-    // 过期的半身命中记录清零
-    if (this.LastHalfHitTime > 0 && now - this.LastHalfHitTime > halfWindowMs) {
-        this.LastHalfHitTime = 0;
+    if (leftUnsafe && unsafeAttackerLookup[leftMapNo]) {
+        attacker = unsafeAttackerLookup[leftMapNo];
+    }
+    if (!attacker && rightUnsafe && unsafeAttackerLookup[rightMapNo]) {
+        attacker = unsafeAttackerLookup[rightMapNo];
     }
 
-    var isHalfHit = false;
-
-    // 横半身（纵轴：上下方向）
-    if (adx <= axisBand && ady > hitCore && ady <= halfReach) {
-        isHalfHit = true;
+    if (leftUnsafe && unsafeEventLookup && unsafeEventLookup[leftMapNo]) {
+        eventId = unsafeEventLookup[leftMapNo];
+    }
+    if (!eventId && rightUnsafe && unsafeEventLookup && unsafeEventLookup[rightMapNo]) {
+        eventId = unsafeEventLookup[rightMapNo];
     }
 
-    // 竖半身（横轴：左右方向）
-    if (ady <= axisBand && adx > hitCore && adx <= halfReach) {
-        isHalfHit = true;
-    }
-
-    if (isHalfHit) {
-        if (this.LastHalfHitTime > 0) {
-            // 两次半身命中在窗口内，致死
-            this.LastHalfHitTime = 0;
-            return true;
+    for (var i = 0; i < leftEventIds.length; i++) {
+        if (eventIds.indexOf(leftEventIds[i]) === -1) {
+            eventIds.push(leftEventIds[i]);
         }
-        this.LastHalfHitTime = now;
+    }
+    for (i = 0; i < rightEventIds.length; i++) {
+        if (eventIds.indexOf(rightEventIds[i]) === -1) {
+            eventIds.push(rightEventIds[i]);
+        }
     }
 
-    return false;
+    return {
+        IsUnsafe: true,
+        Attacker: attacker,
+        LeftUnsafe: leftUnsafe,
+        RightUnsafe: rightUnsafe,
+        LeftMapNo: leftMapNo,
+        RightMapNo: rightMapNo,
+        EventId: eventId,
+        EventIds: eventIds
+    };
 }
 
 Role.prototype.IsFriendlyWith = function(otherRole) {
@@ -641,6 +788,15 @@ Role.prototype.ReleaseFromPaoPao = function(rescuerRole) {
     if (rescuerRole != null) {
         SystemSound.Play(SoundType.Save, false);
     }
+}
+
+Role.prototype.TrySelfRescue = function() {
+    if (this.IsDeath || !this.IsInPaopao) {
+        return false;
+    }
+    this.LastAttacker = null;
+    this.ReleaseFromPaoPao(this);
+    return true;
 }
 
 Role.prototype.ResolveTrapTouchResult = function() {
@@ -841,6 +997,7 @@ Role.prototype.RespawnAt = function(x, y, invincibleMs) {
     this.DismountProtectionUntil = 0;
     this.ExplosionImmuneUntil = Date.now() + (invincibleMs || 0);
     this.LastHalfHitTime = 0;
+    this.ResetExplosionUnsafeFrameCount();
 
     this.Object.Visible = true;
     if (Game.SpriteArray.indexOf(this.Object) === -1) {
@@ -869,30 +1026,64 @@ this.movetoInterval = 0;
 //去任意点
 Role.prototype.MoveTo = function(x, y) {
     this.Stop();
-    clearInterval(this.movetoInterval)
+    clearInterval(this.movetoInterval);
     
     var astar = new Astar(townBarrierMap);
     var current = this.CurrentMapID();
+    var stallTicks = 0;
+    var lastMapKey;
+    var directionTemp;
+    if (!current) {
+        return false;
+    }
     var paths = astar.getPath(current.Y, current.X, y, x);
     //console.log("Start:(%s, %s)  End:(%s, %s)", current.X, current.Y, x, y)
     //console.log(paths);
     
     if(paths.length > 0){
+        if (paths.length <= 1) {
+            return true;
+        }
         var t = this;
         var currentnum = 0;
         var movedone = true;
         var direction;
+        lastMapKey = current.X + "_" + current.Y;
         this.movetoInterval = setInterval(function(){
             if(movedone){
                 currentnum++;
             }
             if(currentnum < paths.length){
                 var currentxy = t.CurrentMapID();
+                var currentMapKey;
+                if (!currentxy) {
+                    clearInterval(t.movetoInterval);
+                    return;
+                }
+                currentMapKey = currentxy.X + "_" + currentxy.Y;
+                if (currentMapKey === lastMapKey) {
+                    stallTicks++;
+                }
+                else {
+                    lastMapKey = currentMapKey;
+                    stallTicks = 0;
+                }
+                if (stallTicks > 90) {
+                    // 卡在原地，结束当前路径，允许上层重新规划
+                    t.Stop();
+                    clearInterval(t.movetoInterval);
+                    return;
+                }
+
                 directionTemp = GetDirection(currentxy.X, currentxy.Y, paths[currentnum]);
                 
                 if(movedone){
                     movedone = false;
                     direction = directionTemp;
+                    if (direction == null) {
+                        movedone = true;
+                        return;
+                    }
                     //console.log("Start:(%s, %s)  End:(%s, %s)", currentxy.X, currentxy.Y, paths[currentnum][1], paths[currentnum][0])
                     t.Move(direction);
                 }
@@ -911,7 +1102,9 @@ Role.prototype.MoveTo = function(x, y) {
                 clearInterval(t.movetoInterval);
             }
         }, 10);
+        return true;
     }
+    return false;
 }
 
 //获取相对位置的方向

@@ -11,6 +11,23 @@ var maxMoveStepInputId = "max-move-step-input";
 var maxMoveStepApplyId = "apply-max-move-step";
 var maxMoveStepHintId = "max-move-step-hint";
 var maxMoveStepConfigBound = false;
+var bubbleSkinSelectId = "bubble-skin-select";
+var bubbleSkinHintId = "bubble-skin-hint";
+var bubbleSkinStorageKey = "bnb_player_bubble_skin";
+var bubbleSkinDefaultValue = "football";
+var bubbleSkinConfigBound = false;
+var mapSelectId = "map-select";
+var mapSelectHintId = "map-select-hint";
+var mapSelectConfigBound = false;
+var aiEnemyCountSelectId = "ai-enemy-count-select";
+var aiEnemyCountHintId = "ai-enemy-count-hint";
+var aiEnemyCountStorageKey = "bnb_ai_enemy_count";
+var aiEnemyCountDefaultValue = 3;
+var aiEnemyCountConfigBound = false;
+var bubbleSkinOptionList = [
+    { value: "football", label: "足球" },
+    { value: "basketball", label: "篮球" }
+];
 
 function EnsureMaxMoveStepConfigDom() {
     var panel = document.getElementById("match-panel");
@@ -85,6 +102,105 @@ function EnsureMaxMoveStepConfigDom() {
         else {
             panel.appendChild(configBlock);
         }
+    }
+}
+
+function EnsureBubbleSkinConfigDom() {
+    var panel = document.getElementById("match-panel");
+    var selectNode = document.getElementById(bubbleSkinSelectId);
+    var scoreList;
+    var configBlock;
+    var label;
+    var row;
+    var hintNode;
+    var i;
+    var optionNode;
+
+    if (!panel) {
+        return;
+    }
+
+    if (!selectNode) {
+        configBlock = document.createElement("div");
+        configBlock.className = "config-block";
+
+        label = document.createElement("label");
+        label.className = "config-label";
+        label.setAttribute("for", bubbleSkinSelectId);
+        label.textContent = "玩家水泡皮肤";
+
+        row = document.createElement("div");
+        row.className = "config-row";
+
+        selectNode = document.createElement("select");
+        selectNode.id = bubbleSkinSelectId;
+        selectNode.className = "config-input";
+
+        for (i = 0; i < bubbleSkinOptionList.length; i++) {
+            optionNode = document.createElement("option");
+            optionNode.value = bubbleSkinOptionList[i].value;
+            optionNode.textContent = bubbleSkinOptionList[i].label;
+            selectNode.appendChild(optionNode);
+        }
+
+        hintNode = document.createElement("div");
+        hintNode.id = bubbleSkinHintId;
+        hintNode.className = "config-hint";
+        hintNode.textContent = "当前皮肤：足球";
+
+        row.appendChild(selectNode);
+        configBlock.appendChild(label);
+        configBlock.appendChild(row);
+        configBlock.appendChild(hintNode);
+
+        scoreList = document.getElementById("score-list");
+        if (scoreList && scoreList.parentNode === panel) {
+            panel.insertBefore(configBlock, scoreList);
+        }
+        else {
+            panel.appendChild(configBlock);
+        }
+    }
+}
+
+function NormalizePlayerBubbleSkin(value) {
+    if (value === "basketball") {
+        return "basketball";
+    }
+    return "football";
+}
+
+function GetBubbleSkinLabel(value) {
+    if (value === "basketball") {
+        return "篮球";
+    }
+    return "足球";
+}
+
+function SetPlayerBubbleSkin(nextSkin) {
+    var normalizedSkin = NormalizePlayerBubbleSkin(nextSkin);
+    var selectNode = document.getElementById(bubbleSkinSelectId);
+    var hintNode = document.getElementById(bubbleSkinHintId);
+
+    window.PlayerBubbleSkin = normalizedSkin;
+
+    try {
+        localStorage.setItem(bubbleSkinStorageKey, normalizedSkin);
+    } catch (e) {}
+
+    if (selectNode) {
+        selectNode.value = normalizedSkin;
+    }
+    if (hintNode) {
+        hintNode.textContent = "当前皮肤：" + GetBubbleSkinLabel(normalizedSkin);
+    }
+}
+
+function ReadStoredPlayerBubbleSkin() {
+    try {
+        return NormalizePlayerBubbleSkin(localStorage.getItem(bubbleSkinStorageKey) || bubbleSkinDefaultValue);
+    } catch (e) {
+        return bubbleSkinDefaultValue;
     }
 }
 
@@ -168,11 +284,289 @@ function InitRoleMaxMoveStepConfig() {
     SetRoleMaxMoveStep(inputNode.value || RoleConstant.MaxMoveStep);
 }
 
+function InitPlayerBubbleSkinConfig() {
+    EnsureBubbleSkinConfigDom();
+
+    var selectNode = document.getElementById(bubbleSkinSelectId);
+    if (!selectNode) {
+        return;
+    }
+
+    if (!bubbleSkinConfigBound) {
+        selectNode.addEventListener("change", function () {
+            SetPlayerBubbleSkin(selectNode.value);
+        });
+        bubbleSkinConfigBound = true;
+    }
+
+    SetPlayerBubbleSkin(ReadStoredPlayerBubbleSkin());
+}
+
+function NormalizeAIEnemyCount(rawValue) {
+    var enemyCount = parseInt(rawValue, 10);
+    if (isNaN(enemyCount)) {
+        enemyCount = aiEnemyCountDefaultValue;
+    }
+    if (enemyCount < 0) {
+        enemyCount = 0;
+    }
+    if (enemyCount > 4) {
+        enemyCount = 4;
+    }
+    return enemyCount;
+}
+
+function ReadStoredAIEnemyCount() {
+    try {
+        return NormalizeAIEnemyCount(localStorage.getItem(aiEnemyCountStorageKey));
+    } catch (e) {
+        return aiEnemyCountDefaultValue;
+    }
+}
+
+function BuildAIEnemyCountOptions(selectNode) {
+    var i;
+    var optionNode;
+    if (!selectNode) {
+        return;
+    }
+    selectNode.innerHTML = "";
+    for (i = 0; i <= 4; i++) {
+        optionNode = document.createElement("option");
+        optionNode.value = String(i);
+        optionNode.textContent = String(i);
+        selectNode.appendChild(optionNode);
+    }
+}
+
+function UpdateAIEnemyCountHint(enemyCount) {
+    var hintNode = document.getElementById(aiEnemyCountHintId);
+    if (hintNode) {
+        hintNode.textContent = "当前敌人数：" + enemyCount;
+    }
+}
+
+function SetAIEnemyCount(nextEnemyCount, shouldRestart) {
+    var normalizedEnemyCount = NormalizeAIEnemyCount(nextEnemyCount);
+    var selectNode = document.getElementById(aiEnemyCountSelectId);
+    try {
+        localStorage.setItem(aiEnemyCountStorageKey, String(normalizedEnemyCount));
+    } catch (e) {}
+
+    if (selectNode) {
+        selectNode.value = String(normalizedEnemyCount);
+    }
+    UpdateAIEnemyCountHint(normalizedEnemyCount);
+
+    if (shouldRestart) {
+        window.location.reload();
+    }
+}
+
+function EnsureAIEnemyCountConfigDom() {
+    var panel = document.getElementById("match-panel");
+    var selectNode = document.getElementById(aiEnemyCountSelectId);
+    var scoreList;
+    var configBlock;
+    var label;
+    var row;
+    var hintNode;
+
+    if (!panel) {
+        return;
+    }
+    if (!selectNode) {
+        configBlock = document.createElement("div");
+        configBlock.className = "config-block";
+
+        label = document.createElement("label");
+        label.className = "config-label";
+        label.setAttribute("for", aiEnemyCountSelectId);
+        label.textContent = "AI敌人数";
+
+        row = document.createElement("div");
+        row.className = "config-row";
+
+        selectNode = document.createElement("select");
+        selectNode.id = aiEnemyCountSelectId;
+        selectNode.className = "config-input";
+        BuildAIEnemyCountOptions(selectNode);
+
+        hintNode = document.createElement("div");
+        hintNode.id = aiEnemyCountHintId;
+        hintNode.className = "config-hint";
+        hintNode.textContent = "当前敌人数：" + aiEnemyCountDefaultValue;
+
+        row.appendChild(selectNode);
+        configBlock.appendChild(label);
+        configBlock.appendChild(row);
+        configBlock.appendChild(hintNode);
+
+        scoreList = document.getElementById("score-list");
+        if (scoreList && scoreList.parentNode === panel) {
+            panel.insertBefore(configBlock, scoreList);
+        }
+        else {
+            panel.appendChild(configBlock);
+        }
+    }
+}
+
+function InitAIEnemyCountConfig() {
+    var selectNode;
+
+    EnsureAIEnemyCountConfigDom();
+    selectNode = document.getElementById(aiEnemyCountSelectId);
+    if (!selectNode) {
+        return;
+    }
+
+    BuildAIEnemyCountOptions(selectNode);
+    if (!aiEnemyCountConfigBound) {
+        selectNode.addEventListener("change", function () {
+            SetAIEnemyCount(selectNode.value, true);
+        });
+        aiEnemyCountConfigBound = true;
+    }
+
+    SetAIEnemyCount(ReadStoredAIEnemyCount(), false);
+}
+
+function EnsureMapSelectConfigDom() {
+    var panel = document.getElementById("match-panel");
+    var selectNode = document.getElementById(mapSelectId);
+    var scoreList;
+    var configBlock;
+    var label;
+    var row;
+    var hintNode;
+
+    if (!panel) {
+        return;
+    }
+
+    if (!selectNode) {
+        configBlock = document.createElement("div");
+        configBlock.className = "config-block";
+
+        label = document.createElement("label");
+        label.className = "config-label";
+        label.setAttribute("for", mapSelectId);
+        label.textContent = "游戏地图";
+
+        row = document.createElement("div");
+        row.className = "config-row";
+
+        selectNode = document.createElement("select");
+        selectNode.id = mapSelectId;
+        selectNode.className = "config-input";
+
+        hintNode = document.createElement("div");
+        hintNode.id = mapSelectHintId;
+        hintNode.className = "config-hint";
+        hintNode.textContent = "当前地图：当前地图（经典）";
+
+        row.appendChild(selectNode);
+        configBlock.appendChild(label);
+        configBlock.appendChild(row);
+        configBlock.appendChild(hintNode);
+
+        scoreList = document.getElementById("score-list");
+        if (scoreList && scoreList.parentNode === panel) {
+            panel.insertBefore(configBlock, scoreList);
+        }
+        else {
+            panel.appendChild(configBlock);
+        }
+    }
+}
+
+function BuildMapSelectOptions(selectNode) {
+    var mapList = typeof GetGameMapOptionList === "function" ? GetGameMapOptionList() : [{ id: "classic", label: "当前地图（经典）" }];
+    var i;
+    var optionNode;
+
+    if (!selectNode) {
+        return;
+    }
+
+    selectNode.innerHTML = "";
+    for (i = 0; i < mapList.length; i++) {
+        optionNode = document.createElement("option");
+        optionNode.value = mapList[i].id;
+        optionNode.textContent = mapList[i].label;
+        selectNode.appendChild(optionNode);
+    }
+}
+
+function UpdateMapSelectHint(mapId) {
+    var hintNode = document.getElementById(mapSelectHintId);
+    var mapLabel = typeof GetCurrentGameMapLabel === "function" ? GetCurrentGameMapLabel() : mapId;
+
+    if (hintNode) {
+        hintNode.textContent = "当前地图：" + mapLabel;
+    }
+}
+
+function ApplySelectedGameMap(mapId, shouldRestart) {
+    var normalizedMapId = mapId;
+    var selectNode = document.getElementById(mapSelectId);
+
+    if (typeof SetCurrentGameMap === "function") {
+        normalizedMapId = SetCurrentGameMap(mapId);
+    }
+
+    if (typeof SaveSelectedGameMap === "function") {
+        SaveSelectedGameMap(normalizedMapId);
+    }
+
+    if (selectNode) {
+        selectNode.value = normalizedMapId;
+    }
+    UpdateMapSelectHint(normalizedMapId);
+
+    if (shouldRestart) {
+        window.location.reload();
+    }
+}
+
+function InitGameMapConfig() {
+    var selectNode;
+    var initialMapId;
+
+    EnsureMapSelectConfigDom();
+    selectNode = document.getElementById(mapSelectId);
+    if (!selectNode) {
+        return;
+    }
+
+    BuildMapSelectOptions(selectNode);
+
+    if (!mapSelectConfigBound) {
+        selectNode.addEventListener("change", function () {
+            ApplySelectedGameMap(selectNode.value, true);
+        });
+        mapSelectConfigBound = true;
+    }
+
+    initialMapId = typeof GetStoredGameMapId === "function" ? GetStoredGameMapId() : selectNode.value;
+    ApplySelectedGameMap(initialMapId, false);
+}
+
 function InitGame(){
+    if (typeof ResetExplosionUnsafeZones === "function") {
+        ResetExplosionUnsafeZones();
+    }
+    InitGameMapConfig();
+    InitAIEnemyCountConfig();
     InitRoleMaxMoveStepConfig();
+    InitPlayerBubbleSkinConfig();
 
     if (typeof ReplaceTreeAndHouseWithBoxes === "function") {
         ReplaceTreeAndHouseWithBoxes();
+    }
+    if (typeof window !== "undefined" && window.BNBTrainingStripNonRigid && typeof StripNonRigidBarriersFromMap === "function") {
+        StripNonRigidBarriersFromMap();
     }
 
     var game = new Game(800, 600);
@@ -233,6 +627,9 @@ function InitGame(){
     //游戏开始
     game.Start();
     DrawGameBackground();
+    if (typeof DrawMapDecorations === "function") {
+        DrawMapDecorations();
+    }
     DrawBarrierMap();
     gameRunning = true;
 }
@@ -282,6 +679,9 @@ function CreateUserEvent(role, socket){
                 e.preventDefault();
                 RoleKeyEvent(key, role);
             }
+            else if (key === 49) {
+                RoleKeyEvent(key, role);
+            }
             if (socket) {
                 socket.emit("KeyUp", key);
             }
@@ -295,7 +695,9 @@ function CreateUserEvent(role, socket){
             if (controlKeys[key]) {
                 e.preventDefault();
             }
-            RoleKeyEventEnd(key, role);
+            if (controlKeys[key] || key === 49) {
+                RoleKeyEventEnd(key, role);
+            }
             if (socket) {
                 socket.emit("KeyDown", key);
             }
@@ -412,6 +814,10 @@ function EndRoundByTime() {
         }
     });
 
+    if (typeof AIEvolution !== "undefined" && typeof AIEvolution.finalizeMatch === "function") {
+        AIEvolution.finalizeMatch();
+    }
+
     RenderMatchPanel();
     setTimeout(function() {
         alert("时间到！本局最高击败：" + (winner ? winner.name + "（" + winner.kills + "）" : "无"));
@@ -447,6 +853,9 @@ function FindRandomRespawnPoint(role) {
         attempts++;
     }
 
+    if (typeof GetCurrentGameMapSpawn === "function") {
+        return GetCurrentGameMapSpawn();
+    }
     return { X: 0, Y: 0 };
 }
 
@@ -512,12 +921,30 @@ function StartSinglePlayerGame(monsterCount) {
     var monsters;
     var player;
     var fighters;
+    var playerSpawn = { X: 0, Y: 0 };
+    var resolvedMonsterCount;
+
+    if (typeof GetStoredGameMapId === "function" && typeof SetCurrentGameMap === "function") {
+        SetCurrentGameMap(GetStoredGameMapId());
+    }
 
     InitGame();
-    player = CreateRole(1, 0, 0);
+    if (typeof AIEvolution !== "undefined" && typeof AIEvolution.startMatch === "function") {
+        AIEvolution.startMatch();
+    }
+    if (typeof GetCurrentGameMapSpawn === "function") {
+        playerSpawn = GetCurrentGameMapSpawn();
+    }
+    player = CreateRole(1, playerSpawn.X, playerSpawn.Y);
     CreateUserEvent(player);
 
-    monsters = typeof StartMonsters === "function" ? StartMonsters(monsterCount || 3) : [];
+    resolvedMonsterCount = NormalizeAIEnemyCount(
+        typeof monsterCount === "number" ? monsterCount : ReadStoredAIEnemyCount()
+    );
+    SetAIEnemyCount(resolvedMonsterCount, false);
+    MonsterCount = resolvedMonsterCount;
+
+    monsters = typeof StartMonsters === "function" ? StartMonsters(resolvedMonsterCount) : [];
     fighters = BuildFighterList(player, monsters);
 
     fighters.forEach(function(unit) {
@@ -594,5 +1021,11 @@ function RoleKeyEvent(key, role) {
     //空格键
     else if(key == 32){
         role.PaoPao();
+    }
+    //数字1：被困泡时自救
+    else if (key == 49 && role.RoleNumber == 1) {
+        if (typeof role.TrySelfRescue === "function") {
+            role.TrySelfRescue();
+        }
     }
 }

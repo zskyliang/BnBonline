@@ -12,6 +12,8 @@ var Barrier = {
         2: { Url: resPrefix + "Pic/TownBlockYellow.png", Offset: new Size(0, 4) },
         //箱子炸开后会可能会出现宝物
         3: { Url: resPrefix + "Pic/TownBox.png", Offset: new Size(0, 4) },
+        //沙漠可炸方块
+        8: { Url: resPrefix + "Pic/SandBlockYellow.png", Offset: new Size(0, 4) },
         4: { Url: resPrefix + "Pic/TownHouseBlue.png", Offset: new Size(0, 17) },
         5: { Url: resPrefix + "Pic/TownHouseRed.png", Offset: new Size(0, 17) },
         6: { Url: resPrefix + "Pic/TownHouseYellow.png", Offset: new Size(0, 17) },
@@ -113,19 +115,23 @@ var Barrier = {
 
     //爆炸掉,区块序号
     Bomb: function (x, y) {
+        if (!Barrier.Storage[y]) {
+            return;
+        }
         var b = Barrier.Storage[y][x];
-        if (b != null) {
-            if ((b.No > 0 && b.No < 3) || b.No > 100) {
-                b.Object.Dispose();
-                townBarrierMap[y][x] = 0;
-                Barrier.Storage[y][x] = null;
-            }
-            else if (b.No == 3) {
-                townBarrierMap[y][x] = CreateRandomGift(); //GiftStorage[y][x];
-                b.Object.Dispose();
-                //生成宝物
-                Barrier.Create(x, y, townBarrierMap[y][x]);
-            }
+        if (b == null) {
+            return;
+        }
+        if ((b.No > 0 && b.No < 3) || b.No === 8 || b.No > 100) {
+            b.Object.Dispose();
+            townBarrierMap[y][x] = 0;
+            Barrier.Storage[y][x] = null;
+        }
+        else if (b.No == 3) {
+            townBarrierMap[y][x] = CreateRandomGift(); //GiftStorage[y][x];
+            b.Object.Dispose();
+            //生成宝物
+            Barrier.Create(x, y, townBarrierMap[y][x]);
         }
     },
 

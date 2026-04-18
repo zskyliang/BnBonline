@@ -121,11 +121,9 @@ var Game = function (width, height) {
             }
 
             //处理精灵数组
-            for (var i = 0; i < Game.SpriteArray.length; i++) {
+            for (var i = Game.SpriteArray.length - 1; i >= 0; i--) {
                 var o = Game.SpriteArray[i];
-                if (!o.Visible) {
-                    Game.SpriteArray[i] = null;
-                    //删除数组元素
+                if (!o || !o.Visible) {
                     Game.SpriteArray.splice(i, 1);
                 }
             }
@@ -138,6 +136,9 @@ var Game = function (width, height) {
             while (diplayedcount < Game.SpriteArray.length) {
                 for (var i = 0; i < Game.SpriteArray.length; i++) {
                     var o = Game.SpriteArray[i];
+                    if (!o) {
+                        continue;
+                    }
                     if (o.ZIndex == currentZIndex) {
                         o.Show(t.context);
                         diplayedcount++;
@@ -146,6 +147,11 @@ var Game = function (width, height) {
                 currentZIndex++;
             }
             t.context.restore();
+
+            // 每帧回调（用于爆炸危险区等逐帧规则判定）
+            if (typeof window !== "undefined" && typeof window.OnGameFrame === "function") {
+                window.OnGameFrame(t);
+            }
 
             //帧数统计
             t.FrameCount++;
