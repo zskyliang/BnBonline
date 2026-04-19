@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PID_FILE="$SCRIPT_DIR/.game-server.pid"
-DEFAULT_BATTLE_URL="http://127.0.0.1:4000/?mode=battle&ml=1&ml_conf=0.26&ml_move_conf=0.34&ml_margin=0.03&ml_force_move_eta=460&ml_wait_block_eta=760&ml_move_threat_ms=300&ml_model=/output/ml/models/dodge_bc_v1.onnx"
+DEFAULT_BATTLE_URL="http://127.0.0.1:4000/?mode=battle&ml=1&ml_policy_mode=pure&ml_conf=0.26&ml_move_conf=0.34&ml_margin=0.03&ml_force_move_eta=460&ml_wait_block_eta=760&ml_move_threat_ms=300&ml_model=/output/ml/models/dodge_iql_v1.onnx"
 BATTLE_URL="${BATTLE_URL:-$DEFAULT_BATTLE_URL}"
 
 stop_server() {

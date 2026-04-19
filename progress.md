@@ -399,3 +399,48 @@ User-request update (2026-04-18, battle 模式 1~3 分钟卡死排查):
   - `node --check public/game/bnbBarrier.js` 通过
   - `node --check public/game/game.js` 通过
   - 额外回归：手工注入 `Barrier.Create(0,0,101)` 后页面仍可持续运行（无卡死）。
+
+User-request update (2026-04-19, IQL pure model V1 implementation):
+- Implemented `IQL pure` data/feature/runtime path in `public/game/bnbMonsters.js`:
+  - Feature encoder upgraded to `13x15x8` with new channels: blast map / reachability / half-body layer.
+  - State vector expanded to 9 dims: `[dx,dy,left/right foot unsafe,left/right eta,center eta,safeNeighbors,activeBombs]`.
+  - Dataset rows now carry `policy_tag` and `risk_label` with IQL-ready `reward/done/next_state`.
+  - Training-mode mixed behavior corrected to single-sample policy choice per frame (avoid double-mix bias).
+  - Reward finalization fixed from constant reward to shaped IQL reward path.
+  - Pure mode runtime invariants kept observable (`rule_calls`, `pure_violation_count`) and decode supports `risk_logit` output.
+  - Pure-mode confidence gating adjusted so low-confidence no longer hard-blocks model actions.
+- Added/updated IQL pipeline scripts:
+  - New `ml/train_iql.py`: discrete IQL (Q1/Q2 + V expectile + policy AWBC + risk head), ONNX export.
+  - New `scripts/train-iql-iterative.js`: rounds target contract (`200k/400k/600k/900k`).
+  - `scripts/collect-dodge-dataset.js` defaults switched to IQL dataset/report names and supports IQL mix params in URL/report.
+  - `scripts/eval-ml-dodge.js` supports pure mode metrics (`rule_calls_mean`, `pure_violation_count_mean`) and defaults to IQL model url.
+  - `package.json` scripts added: `collect:iql`, `train:iql`, `train:iql:iterative`, `eval:iql`.
+  - `public/game/restart-game.sh` default battle link switched to pure IQL ONNX model.
+
+Validation & execution:
+- Syntax checks passed:
+  - `node --check public/game/bnbMonsters.js`
+  - `node --check scripts/collect-dodge-dataset.js`
+  - `node --check scripts/eval-ml-dodge.js`
+  - `node --check scripts/train-iql-iterative.js`
+  - `python3 -m py_compile ml/train_iql.py`
+- Completed full Round A data collection (200k exact):
+  - dataset: `output/ml/datasets/dodge_iql_v1_mixed_200k.jsonl`
+  - rows_written: `200000`
+  - policy mix written: expert `119997`, random `40284`, epsilon `39719` (close to 6:2:2)
+  - action written: wait-heavy (`157642` waits) due pure-run behavior distribution.
+- Trained IQL model artifacts:
+  - `output/ml/models/dodge_iql_v1.pt`
+  - `output/ml/models/dodge_iql_v1.onnx`
+  - `output/ml/reports/iql_v1_metrics.json`
+- Evaluation (`3 runs x 60s`, pure mode):
+  - Before pure-gating fix: model mean survival `0.9339`.
+  - After pure-gating fix: model mean survival `0.9453`, baseline `0.9183`, delta `+0.0270`.
+  - Pure invariant confirmed: `rule_calls_mean=0`, `pure_violation_count_mean=0`, `fallback_rate_mean=0`.
+- KPI status:
+  - Current round A still below target `>=0.98`; next planned step remains data-scale rounds (`400k -> 600k -> 900k`) with retraining.
+
+Runtime launch:
+- Restarted server via `public/game/restart-game.sh`.
+- Current battle URL:
+  - `http://127.0.0.1:4000/?mode=battle&ml=1&ml_policy_mode=pure&ml_conf=0.26&ml_move_conf=0.34&ml_margin=0.03&ml_force_move_eta=460&ml_wait_block_eta=760&ml_move_threat_ms=300&ml_model=/output/ml/models/dodge_iql_v1.onnx`

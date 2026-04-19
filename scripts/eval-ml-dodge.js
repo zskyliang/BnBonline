@@ -41,10 +41,12 @@ async function runScenario(mlEnabled, durationMs, modelUrl, runIndex, cfg) {
     const mlForceMoveEta = cfg.mlForceMoveEta;
     const mlWaitBlockEta = cfg.mlWaitBlockEta;
     const mlMoveThreatMs = cfg.mlMoveThreatMs;
+    const policyMode = cfg.policyMode || "pure";
     const url =
         "http://127.0.0.1:4000/?train=1&autostart=0&ml=" +
         flag +
         "&ml_collect=0&ml_freeze=1" +
+        "&ml_policy_mode=" + encodeURIComponent(policyMode) +
         (typeof mlConf === "number" ? "&ml_conf=" + encodeURIComponent(String(mlConf)) : "") +
         (typeof mlMoveConf === "number" ? "&ml_move_conf=" + encodeURIComponent(String(mlMoveConf)) : "") +
         (typeof mlMargin === "number" ? "&ml_margin=" + encodeURIComponent(String(mlMargin)) : "") +
@@ -121,6 +123,8 @@ async function runScenario(mlEnabled, durationMs, modelUrl, runIndex, cfg) {
             bombed_count: bombed,
             survival_rate: survival,
             fallback_rate: runtime.fallback_rate || 0,
+            rule_calls: runtime.rule_calls || 0,
+            pure_violation_count: runtime.pure_violation_count || 0,
             avg_latency_ms: runtime.avg_latency_ms || 0,
             screenshot,
             runtime_state: runtime,
@@ -139,6 +143,8 @@ function summarizeRuns(mode, runs) {
     let spawnSum = 0;
     let ignoredSum = 0;
     let bombedSum = 0;
+    let ruleCallsSum = 0;
+    let pureViolationSum = 0;
     for (const run of runs) {
         survivalSum += run.survival_rate || 0;
         fallbackSum += run.fallback_rate || 0;
@@ -146,12 +152,16 @@ function summarizeRuns(mode, runs) {
         spawnSum += run.spawned_bubbles_effective || run.spawned_bubbles || 0;
         ignoredSum += run.spawned_bubbles_ignored_trapped || 0;
         bombedSum += run.bombed_count || 0;
+        ruleCallsSum += run.rule_calls || 0;
+        pureViolationSum += run.pure_violation_count || 0;
     }
     return {
         mode,
         runs: runs.length,
         survival_rate_mean: survivalSum / n,
         fallback_rate_mean: fallbackSum / n,
+        rule_calls_mean: ruleCallsSum / n,
+        pure_violation_count_mean: pureViolationSum / n,
         avg_latency_ms_mean: latencySum / n,
         spawned_bubbles_effective_mean: spawnSum / n,
         spawned_bubbles_ignored_trapped_mean: ignoredSum / n,
@@ -162,7 +172,7 @@ function summarizeRuns(mode, runs) {
 async function main() {
     const durationMs = asInt(getArg("duration-ms", "60000"), 60000);
     const runs = asInt(getArg("runs", "3"), 3);
-    const modelUrl = getArg("model-url", "/output/ml/models/dodge_bc_v1.onnx");
+    const modelUrl = getArg("model-url", "/output/ml/models/dodge_iql_v1.onnx");
     const mlConfRaw = getArg("ml-conf", "");
     const cfg = {
         mlConf: asFloatOrNull(mlConfRaw),
@@ -170,7 +180,8 @@ async function main() {
         mlMargin: asFloatOrNull(getArg("ml-margin", "")),
         mlForceMoveEta: asFloatOrNull(getArg("ml-force-move-eta", "")),
         mlWaitBlockEta: asFloatOrNull(getArg("ml-wait-block-eta", "")),
-        mlMoveThreatMs: asFloatOrNull(getArg("ml-move-threat-ms", ""))
+        mlMoveThreatMs: asFloatOrNull(getArg("ml-move-threat-ms", "")),
+        policyMode: getArg("policy-mode", "pure")
     };
     fs.mkdirSync(OUT_DIR, { recursive: true });
 
