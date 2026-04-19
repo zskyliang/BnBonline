@@ -29,6 +29,26 @@ npm start
 PORT=8080 npm start
 ```
 
+### 1.4 快速重启脚本（开发场景）
+
+- Linux/macOS:
+
+```bash
+./public/game/restart-game.sh
+```
+
+- Windows PowerShell:
+
+```powershell
+.\public\game\restart-game.ps1
+```
+
+如遇执行策略限制，可改用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\public\game\restart-game.ps1
+```
+
 ## 2. Docker 一键启动（推荐）
 
 ### 2.1 前置要求

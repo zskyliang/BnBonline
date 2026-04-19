@@ -32,6 +32,18 @@ npm start
 ./public/game/restart-game.sh
 ```
 
+Windows PowerShell 可使用：
+
+```powershell
+.\public\game\restart-game.ps1
+```
+
+如果本机限制脚本执行，可用：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\public\game\restart-game.ps1
+```
+
 适合本地开发时快速重启服务。
 
 ## 2. Docker 一键部署（推荐移植）
