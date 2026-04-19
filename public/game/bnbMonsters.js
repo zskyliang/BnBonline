@@ -21,6 +21,16 @@ var AIDodgePolicy = {
     halfBodyMinEtaMs: 220
 };
 var LastThreatSnapshot = null;
+var BNBMLActionSpace = {
+    WAIT: 0,
+    UP: 1,
+    DOWN: 2,
+    LEFT: 3,
+    RIGHT: 4,
+    DROP_BOMB: 5,
+    MAX_DIM: 6,
+    LEGACY_DIM: 5
+};
 
 function ClampNumber(v, min, max) {
     if (v < min) return min;
@@ -99,7 +109,7 @@ function GetTrainingFailureHeatPenalty(x, y) {
 // Offline ML (Behavioral Cloning V1)
 // =============================================================================
 
-var BNBMLDefaultModelUrl = "/output/ml/models/dodge_bc_v1.onnx";
+var BNBMLDefaultModelUrl = "/output/ml/models/dodge_iql_v1.onnx";
 var BNBMLCollectStorageKey = "bnb_ml_collect_state_v1";
 var BNBMLConfig = {
     enableRuntime: false,
@@ -114,7 +124,12 @@ var BNBMLConfig = {
     collectWaitKeepProb: 0.15,
     forceMoveEtaMs: 520,
     waitBlockEtaMs: 760,
-    moveThreatSoonMs: 280
+    moveThreatSoonMs: 280,
+    policyMode: "pure",
+    iqlMixEnabled: false,
+    iqlMixExpertRatio: 0.6,
+    iqlMixRandomRatio: 0.2,
+    iqlMixEpsilonRatio: 0.2
 };
 
 function GetBNBQueryParam(name) {
@@ -147,6 +162,12 @@ function ParseBNBNumber(raw, fallback) {
 
 function RefreshBNBMLConfigFromQuery() {
     var modelUrl = GetBNBQueryParam("ml_model");
+    var policyMode = GetBNBQueryParam("ml_policy_mode");
+    var mixEnabled = ParseBNBBool(GetBNBQueryParam("ml_iql_mix"));
+    var mixExpertRatio = ParseBNBNumber(GetBNBQueryParam("ml_mix_expert"), BNBMLConfig.iqlMixExpertRatio);
+    var mixRandomRatio = ParseBNBNumber(GetBNBQueryParam("ml_mix_random"), BNBMLConfig.iqlMixRandomRatio);
+    var mixEpsilonRatio = ParseBNBNumber(GetBNBQueryParam("ml_mix_epsilon"), BNBMLConfig.iqlMixEpsilonRatio);
+    var mixSum;
     BNBMLConfig.enableRuntime = ParseBNBBool(GetBNBQueryParam("ml"));
     BNBMLConfig.enableCollect = ParseBNBBool(GetBNBQueryParam("ml_collect"));
     BNBMLConfig.freezeExpertPolicy = ParseBNBBool(GetBNBQueryParam("ml_freeze"));
@@ -185,6 +206,24 @@ function RefreshBNBMLConfigFromQuery() {
         180,
         1200
     );
+    if (policyMode === "hybrid" || policyMode === "pure") {
+        BNBMLConfig.policyMode = policyMode;
+    }
+    BNBMLConfig.iqlMixEnabled = !!mixEnabled;
+    BNBMLConfig.iqlMixExpertRatio = ClampNumber(mixExpertRatio, 0, 1);
+    BNBMLConfig.iqlMixRandomRatio = ClampNumber(mixRandomRatio, 0, 1);
+    BNBMLConfig.iqlMixEpsilonRatio = ClampNumber(mixEpsilonRatio, 0, 1);
+    mixSum = BNBMLConfig.iqlMixExpertRatio + BNBMLConfig.iqlMixRandomRatio + BNBMLConfig.iqlMixEpsilonRatio;
+    if (mixSum <= 0) {
+        BNBMLConfig.iqlMixExpertRatio = 1;
+        BNBMLConfig.iqlMixRandomRatio = 0;
+        BNBMLConfig.iqlMixEpsilonRatio = 0;
+    }
+    else {
+        BNBMLConfig.iqlMixExpertRatio /= mixSum;
+        BNBMLConfig.iqlMixRandomRatio /= mixSum;
+        BNBMLConfig.iqlMixEpsilonRatio /= mixSum;
+    }
     if (modelUrl) {
         BNBMLConfig.modelUrl = modelUrl;
     }
@@ -206,7 +245,7 @@ function IsOfflineMLExpertFreezeEnabled() {
 
 function NormalizeActionId(action) {
     var a = parseInt(action, 10);
-    if (isNaN(a) || a < 0 || a > 4) {
+    if (isNaN(a) || a < 0 || a >= BNBMLActionSpace.MAX_DIM) {
         return 0;
     }
     return a;
@@ -259,6 +298,125 @@ function BuildTargetMapByAction(currentMap, action) {
     };
 }
 
+function ResolveBNBMLActionDim(actionDim) {
+    var n = parseInt(actionDim, 10);
+    if (isNaN(n)) {
+        return BNBMLActionSpace.MAX_DIM;
+    }
+    return ClampNumber(n, 1, BNBMLActionSpace.MAX_DIM);
+}
+
+function ResolveBNBMLModelActionDim(actionDimFromModel) {
+    var n = parseInt(actionDimFromModel, 10);
+    if (isNaN(n)) {
+        return BNBMLActionSpace.MAX_DIM;
+    }
+    if (n === BNBMLActionSpace.LEGACY_DIM) {
+        return BNBMLActionSpace.LEGACY_DIM;
+    }
+    return BNBMLActionSpace.MAX_DIM;
+}
+
+function BuildBNBMLActionHistTemplate(actionDim) {
+    var dim = ResolveBNBMLActionDim(actionDim);
+    var hist = {};
+    var i;
+    for (i = 0; i < dim; i++) {
+        hist[String(i)] = 0;
+    }
+    return hist;
+}
+
+function CanRoleDropBombState(role) {
+    return !!role
+        && !role.IsDeath
+        && !role.IsInPaopao
+        && role.CanPaopaoLength > role.PaopaoCount;
+}
+
+function GetMonsterBombEscapeTarget(monster, currentMap, snapshot) {
+    var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+    var strong;
+    if (!monster || !monster.Role || !currentMap) {
+        return null;
+    }
+    strong = Math.max(1, parseInt(monster.Role.PaopaoStrong || 1, 10));
+    return FindEscapeRoute(
+        currentMap.X,
+        currentMap.Y,
+        currentMap.X,
+        currentMap.Y,
+        strong,
+        src && src.threatMap ? src.threatMap : {}
+    );
+}
+
+function CanMonsterDropBombSafely(monster, currentMap, snapshot) {
+    if (!monster || !currentMap || typeof monster.CanDropBomb !== "function" || !monster.CanDropBomb()) {
+        return false;
+    }
+    return !!GetMonsterBombEscapeTarget(monster, currentMap, snapshot);
+}
+
+function GetNearestEnemyInfo(selfRole, currentMap) {
+    var enemies;
+    var i;
+    var enemy;
+    var enemyMap;
+    var dist;
+    var nearest = null;
+    if (!selfRole || !currentMap) {
+        return null;
+    }
+    enemies = FindAllEnemies(selfRole);
+    for (i = 0; i < enemies.length; i++) {
+        enemy = enemies[i];
+        if (!enemy || enemy.IsDeath || enemy.IsInPaopao || typeof enemy.CurrentMapID !== "function") {
+            continue;
+        }
+        enemyMap = enemy.CurrentMapID();
+        if (!enemyMap) {
+            continue;
+        }
+        dist = ManhattanDist(currentMap.X, currentMap.Y, enemyMap.X, enemyMap.Y);
+        if (!nearest || dist < nearest.dist) {
+            nearest = {
+                role: enemy,
+                map: enemyMap,
+                dist: dist
+            };
+        }
+    }
+    return nearest;
+}
+
+function EncodeItemCellValue(cellNo) {
+    if (cellNo === 101) return 1.0;
+    if (cellNo === 102) return 0.9;
+    if (cellNo === 103) return 0.95;
+    return 0;
+}
+
+function IsBNBMLPurePolicyMode() {
+    return (BNBMLConfig.policyMode || "pure") === "pure";
+}
+
+function FindAIStateCell(stateMap) {
+    var y;
+    var x;
+    if (!stateMap || !stateMap.length || !stateMap[0] || !stateMap[0].length) {
+        return null;
+    }
+    for (y = 0; y < stateMap.length; y++) {
+        for (x = 0; x < stateMap[y].length; x++) {
+            if (stateMap[y][x] && stateMap[y][x][3] > 0.5) {
+                return { X: x, Y: y };
+            }
+        }
+    }
+    return null;
+}
+
 function EncodeActionFromChoice(choice, currentMap) {
     if (!choice) {
         return 0;
@@ -297,6 +455,9 @@ function FormatDecisionPathText(startMap, targetMap, action) {
     if (NormalizeActionId(action) === 0) {
         return FormatMapPos(startMap) + " wait";
     }
+    if (NormalizeActionId(action) === BNBMLActionSpace.DROP_BOMB) {
+        return FormatMapPos(startMap) + " drop_bomb";
+    }
     return FormatMapPos(startMap) + "->" + FormatMapPos(targetMap || startMap);
 }
 
@@ -331,15 +492,153 @@ var BNBMLFeatureEncoder = {
         return map;
     },
 
+    IsBlastBlockedCell: function(cellNo) {
+        if (cellNo === 0 || cellNo > 100) {
+            return false;
+        }
+        return true;
+    },
+
+    BuildBlastDangerMap: function(rows, cols, now, fuseMs) {
+        var blastMap = {};
+        var y;
+        var x;
+        var bomb;
+        var bombEta;
+        var score;
+        var dir;
+        var step;
+        var nx;
+        var ny;
+        var key;
+        var strong;
+        var cellNo;
+        for (y = 0; y < PaopaoArray.length; y++) {
+            if (!PaopaoArray[y]) continue;
+            for (x = 0; x < PaopaoArray[y].length; x++) {
+                bomb = PaopaoArray[y][x];
+                if (!bomb || bomb.IsExploded || y >= rows || x >= cols) continue;
+                bombEta = (typeof bomb.ExplodeAt === "number" ? bomb.ExplodeAt : now + fuseMs) - now;
+                if (bombEta < 0) bombEta = 0;
+                score = ClampNumber(1 - bombEta / Math.max(1, fuseMs), 0, 1);
+                key = MapKey(x, y);
+                if (score > (blastMap[key] || 0)) {
+                    blastMap[key] = score;
+                }
+                strong = Math.max(1, parseInt(bomb.PaopaoStrong || 1, 10));
+                for (dir = 0; dir < DIRS.length; dir++) {
+                    for (step = 1; step <= strong; step++) {
+                        nx = x + DIRS[dir].dx * step;
+                        ny = y + DIRS[dir].dy * step;
+                        if (!IsInsideMap(nx, ny) || ny >= rows || nx >= cols) {
+                            break;
+                        }
+                        key = MapKey(nx, ny);
+                        if (score > (blastMap[key] || 0)) {
+                            blastMap[key] = score;
+                        }
+                        cellNo = townBarrierMap[ny][nx];
+                        if (this.IsBlastBlockedCell(cellNo)) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        return blastMap;
+    },
+
+    BuildReachabilityMap: function(currentMap, snapshot) {
+        var queue = [];
+        var head = 0;
+        var seen = {};
+        var reachable = {};
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var limitEta = Math.max(220, AIDodgePolicy.safeBufferMs + 40);
+        var current;
+        var i;
+        var nx;
+        var ny;
+        var key;
+        var eta;
+        var unsafe;
+        if (!currentMap) {
+            return reachable;
+        }
+        queue.push({ X: currentMap.X, Y: currentMap.Y });
+        seen[MapKey(currentMap.X, currentMap.Y)] = true;
+        while (head < queue.length) {
+            current = queue[head++];
+            key = MapKey(current.X, current.Y);
+            eta = src && src.dangerEtaMap ? src.dangerEtaMap[key] : null;
+            unsafe = !!(src && src.threatMap && src.threatMap[key]);
+            if (!unsafe && (typeof eta !== "number" || eta > limitEta)) {
+                reachable[key] = 1;
+            }
+            for (i = 0; i < DIRS.length; i++) {
+                nx = current.X + DIRS[i].dx;
+                ny = current.Y + DIRS[i].dy;
+                key = MapKey(nx, ny);
+                if (!IsAIWalkable(nx, ny) || seen[key]) continue;
+                seen[key] = true;
+                queue.push({ X: nx, Y: ny });
+            }
+        }
+        return reachable;
+    },
+
+    BuildHalfBodyLayer: function(rows, cols, snapshot) {
+        var layer = {};
+        var y;
+        var x;
+        var key;
+        var leftKey;
+        var rightKey;
+        var eta;
+        var leftEta;
+        var rightEta;
+        var unsafe;
+        var leftUnsafe;
+        var rightUnsafe;
+        var soonMs = Math.max(160, AIDodgePolicy.halfBodyMinEtaMs || 220);
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        for (y = 0; y < rows; y++) {
+            for (x = 0; x < cols; x++) {
+                key = MapKey(x, y);
+                leftKey = MapKey(Math.max(0, x - 1), y);
+                rightKey = MapKey(Math.min(cols - 1, x + 1), y);
+                eta = src && src.dangerEtaMap ? src.dangerEtaMap[key] : null;
+                leftEta = src && src.dangerEtaMap ? src.dangerEtaMap[leftKey] : null;
+                rightEta = src && src.dangerEtaMap ? src.dangerEtaMap[rightKey] : null;
+                unsafe = !!(src && src.threatMap && src.threatMap[key]) || (typeof eta === "number" && eta <= soonMs);
+                leftUnsafe = !!(src && src.threatMap && src.threatMap[leftKey]) || (typeof leftEta === "number" && leftEta <= soonMs);
+                rightUnsafe = !!(src && src.threatMap && src.threatMap[rightKey]) || (typeof rightEta === "number" && rightEta <= soonMs);
+                if (leftUnsafe !== rightUnsafe) {
+                    layer[key] = 1;
+                }
+                else if (unsafe && leftUnsafe && rightUnsafe) {
+                    layer[key] = 0.5;
+                }
+                else {
+                    layer[key] = 0;
+                }
+            }
+        }
+        return layer;
+    },
+
     Encode: function(role, currentMap, snapshot) {
         var rows = typeof MapRowCount === "number" ? MapRowCount : 13;
         var cols = typeof MapColumnCount === "number" ? MapColumnCount : 15;
-        var channels = 5;
+        var channels = 10;
         var now = Date.now();
         var forecastMs = Math.max(1, AIDodgePolicy.forecastMs || 1750);
         var fuseMs = typeof GetPaopaoFuseMs === "function" ? Math.max(1, GetPaopaoFuseMs()) : 3000;
         var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
         var map = this.CreateEmptyMap(rows, cols, channels);
+        var blastMap = this.BuildBlastDangerMap(rows, cols, now, fuseMs);
+        var reachabilityMap = this.BuildReachabilityMap(currentMap, src);
+        var halfBodyLayer = this.BuildHalfBodyLayer(rows, cols, src);
         var y;
         var x;
         var key;
@@ -353,6 +652,60 @@ var BNBMLFeatureEncoder = {
         var centerY;
         var dx = 0;
         var dy = 0;
+        var feet;
+        var leftMapNo;
+        var rightMapNo;
+        var leftFootUnsafe = 0;
+        var rightFootUnsafe = 0;
+        var leftFootEtaNorm = 0;
+        var rightFootEtaNorm = 0;
+        var centerEtaNorm = 0;
+        var safeNeighborsNorm = 0;
+        var activeBombsNorm = 0;
+        var selfCanDropBomb = 0;
+        var selfBombCapacityNorm = 0;
+        var selfBombPowerNorm = 0;
+        var selfSpeedNorm = 0;
+        var enemyDistanceNorm = 1;
+        var enemyCanDropBomb = 0;
+        var enemyThreatDensity = 0;
+        var footKey;
+        var enemies;
+        var enemy;
+        var enemyMap;
+        var enemyKey;
+        var enemyMapLayer = {};
+        var enemyProximitySum = 0;
+        var nearestEnemy = null;
+        var dist;
+        var mapDiameterNorm = Math.max(1, rows + cols);
+        var maxStrong = (typeof RoleConstant !== "undefined" && RoleConstant && RoleConstant.MaxPaopaoStrong)
+            ? RoleConstant.MaxPaopaoStrong
+            : 8;
+        var maxMoveStep = (typeof RoleConstant !== "undefined" && RoleConstant && RoleConstant.MaxMoveStep)
+            ? RoleConstant.MaxMoveStep
+            : 10;
+
+        if (role && currentMap) {
+            enemies = FindAllEnemies(role);
+            for (y = 0; y < enemies.length; y++) {
+                enemy = enemies[y];
+                if (!enemy || enemy.IsDeath || enemy.IsInPaopao || typeof enemy.CurrentMapID !== "function") {
+                    continue;
+                }
+                enemyMap = enemy.CurrentMapID();
+                if (!enemyMap || !IsInsideMap(enemyMap.X, enemyMap.Y)) {
+                    continue;
+                }
+                enemyKey = MapKey(enemyMap.X, enemyMap.Y);
+                enemyMapLayer[enemyKey] = 1;
+                dist = ManhattanDist(currentMap.X, currentMap.Y, enemyMap.X, enemyMap.Y);
+                enemyProximitySum += 1 / Math.max(1, dist);
+                if (!nearestEnemy || dist < nearestEnemy.dist) {
+                    nearestEnemy = { role: enemy, map: enemyMap, dist: dist };
+                }
+            }
+        }
 
         for (y = 0; y < rows; y++) {
             for (x = 0; x < cols; x++) {
@@ -364,6 +717,11 @@ var BNBMLFeatureEncoder = {
                 }
                 safeNeighbors = CountSafeNeighborTiles(x, y, src);
                 map[y][x][4] = safeNeighbors >= 3 ? 1 : 0;
+                map[y][x][5] = blastMap[key] || 0;
+                map[y][x][6] = reachabilityMap[key] || 0;
+                map[y][x][7] = halfBodyLayer[key] || 0;
+                map[y][x][8] = enemyMapLayer[key] || 0;
+                map[y][x][9] = EncodeItemCellValue(townBarrierMap[y][x]);
             }
         }
 
@@ -390,11 +748,61 @@ var BNBMLFeatureEncoder = {
             centerY = currentMap.Y * 40 + 20;
             dx = ClampNumber((mapPoint.X - centerX) / 20, -1, 1);
             dy = ClampNumber((mapPoint.Y - centerY) / 20, -1, 1);
+            feet = typeof role.GetFootMapIDPair === "function" ? role.GetFootMapIDPair() : null;
+            leftMapNo = feet && feet.Left ? feet.Left.Y * 15 + feet.Left.X : -1;
+            rightMapNo = feet && feet.Right ? feet.Right.Y * 15 + feet.Right.X : -1;
+            if (leftMapNo >= 0) {
+                footKey = MapKey(leftMapNo % 15, parseInt(leftMapNo / 15, 10));
+                eta = src && src.dangerEtaMap ? src.dangerEtaMap[footKey] : null;
+                leftFootUnsafe = !!(src && src.threatMap && src.threatMap[footKey]) ? 1 : 0;
+                leftFootEtaNorm = typeof eta === "number" ? ClampNumber(1 - eta / forecastMs, 0, 1) : 0;
+            }
+            if (rightMapNo >= 0) {
+                footKey = MapKey(rightMapNo % 15, parseInt(rightMapNo / 15, 10));
+                eta = src && src.dangerEtaMap ? src.dangerEtaMap[footKey] : null;
+                rightFootUnsafe = !!(src && src.threatMap && src.threatMap[footKey]) ? 1 : 0;
+                rightFootEtaNorm = typeof eta === "number" ? ClampNumber(1 - eta / forecastMs, 0, 1) : 0;
+            }
+            key = MapKey(currentMap.X, currentMap.Y);
+            eta = src && src.dangerEtaMap ? src.dangerEtaMap[key] : null;
+            centerEtaNorm = typeof eta === "number" ? ClampNumber(1 - eta / forecastMs, 0, 1) : 0;
+            safeNeighborsNorm = ClampNumber(CountSafeNeighborTiles(currentMap.X, currentMap.Y, src) / 4, 0, 1);
+            activeBombsNorm = ClampNumber(CountActiveBombs() / 10, 0, 1);
+            selfCanDropBomb = CanRoleDropBombState(role) ? 1 : 0;
+            selfBombCapacityNorm = ClampNumber(
+                (role.CanPaopaoLength - role.PaopaoCount) / Math.max(1, MonsterMaxPaopaoLength || role.CanPaopaoLength || 1),
+                0,
+                1
+            );
+            selfBombPowerNorm = ClampNumber((role.PaopaoStrong || 1) / Math.max(1, maxStrong), 0, 1);
+            selfSpeedNorm = ClampNumber((role.MoveStep || 0) / Math.max(1, maxMoveStep), 0, 1);
+            if (nearestEnemy) {
+                enemyDistanceNorm = ClampNumber(nearestEnemy.dist / mapDiameterNorm, 0, 1);
+                enemyCanDropBomb = CanRoleDropBombState(nearestEnemy.role) ? 1 : 0;
+            }
+            enemyThreatDensity = ClampNumber(enemyProximitySum / 2, 0, 1);
         }
 
         return {
             state_map: map,
-            state_vector: [dx, dy]
+            state_vector: [
+                dx,
+                dy,
+                leftFootUnsafe,
+                rightFootUnsafe,
+                leftFootEtaNorm,
+                rightFootEtaNorm,
+                centerEtaNorm,
+                safeNeighborsNorm,
+                activeBombsNorm,
+                selfCanDropBomb,
+                selfBombCapacityNorm,
+                selfBombPowerNorm,
+                selfSpeedNorm,
+                enemyDistanceNorm,
+                enemyCanDropBomb,
+                enemyThreatDensity
+            ]
         };
     },
 
@@ -425,12 +833,15 @@ var BNBMLDatasetCollector = {
         rowsReady: [],
         stagingRows: [],
         lastOpenSample: null,
+        lastFinalizedSample: null,
         sampleIdSeed: 0,
         samplesFinalized: 0,
-        actionHist: { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0 },
+        actionHist: BuildBNBMLActionHistTemplate(BNBMLActionSpace.MAX_DIM),
         spawnedBubblesEffective: 0,
         spawnedBubblesIgnoredTrapped: 0,
-        bombedCount: 0
+        bombedCount: 0,
+        policyTagHist: { expert: 0, random: 0, epsilon: 0 },
+        riskLabelHist: { "0": 0, "1": 0 }
     },
 
     Init: function() {
@@ -439,12 +850,15 @@ var BNBMLDatasetCollector = {
         this.State.rowsReady = [];
         this.State.stagingRows = [];
         this.State.lastOpenSample = null;
+        this.State.lastFinalizedSample = null;
         this.State.sampleIdSeed = 0;
         this.State.samplesFinalized = 0;
-        this.State.actionHist = { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0 };
+        this.State.actionHist = BuildBNBMLActionHistTemplate(BNBMLActionSpace.MAX_DIM);
         this.State.spawnedBubblesEffective = 0;
         this.State.spawnedBubblesIgnoredTrapped = 0;
         this.State.bombedCount = 0;
+        this.State.policyTagHist = { expert: 0, random: 0, epsilon: 0 };
+        this.State.riskLabelHist = { "0": 0, "1": 0 };
         this.PublishState();
     },
 
@@ -464,6 +878,214 @@ var BNBMLDatasetCollector = {
             safeNeighbors: CountSafeNeighborTiles(currentMap.X, currentMap.Y, snapshot),
             nextSafeRank: choice ? choice.safeRank : null
         };
+    },
+
+    GetRiskScoreFromState: function(state) {
+        var map;
+        var cell;
+        if (!state || !state.state_map) {
+            return 0;
+        }
+        map = state.state_map;
+        cell = FindAIStateCell(map);
+        if (!cell || !map[cell.Y] || !map[cell.Y][cell.X]) {
+            return 0;
+        }
+        return ClampNumber(map[cell.Y][cell.X][2] || 0, 0, 1);
+    },
+
+    InferRiskLabel: function(sample, done) {
+        var risk = 0;
+        var meta = sample && sample.meta ? sample.meta : {};
+        var eta = typeof meta.eta === "number" ? meta.eta : null;
+        if (sample && sample.pre_death) {
+            return 1;
+        }
+        if (done) {
+            return 1;
+        }
+        if (this.GetRiskScoreFromState(sample && sample.state ? sample.state : null) >= 0.45) {
+            risk = 1;
+        }
+        if (typeof eta === "number" && eta <= Math.max(260, AIDodgePolicy.safeBufferMs + 60)) {
+            risk = 1;
+        }
+        if ((meta.activeBombs || 0) > 0 && (meta.safeNeighbors || 0) <= 1) {
+            risk = 1;
+        }
+        return risk;
+    },
+
+    NormalizeOutcomeTag: function(outcomeTag, preDeath, done) {
+        var tag = typeof outcomeTag === "string" ? outcomeTag : "";
+        tag = String(tag).toLowerCase();
+        if (tag === "death") {
+            tag = preDeath ? "self_kill" : "loss";
+        }
+        if (tag === "done") {
+            tag = done ? "draw" : "ongoing";
+        }
+        if (tag === "win" || tag === "loss" || tag === "draw" || tag === "self_kill") {
+            return tag;
+        }
+        if (!done) {
+            return "ongoing";
+        }
+        if (preDeath) {
+            return "self_kill";
+        }
+        return "draw";
+    },
+
+    ComputeIQLReward: function(sample, nextState, done) {
+        var nowRisk = this.GetRiskScoreFromState(sample && sample.state ? sample.state : null);
+        var nextRisk = this.GetRiskScoreFromState(nextState);
+        var reward = 0.03;
+        var deltaRisk = nowRisk - nextRisk;
+        if (done) {
+            return -2.0;
+        }
+        reward -= nowRisk * 0.08;
+        if (deltaRisk > 0) {
+            reward += ClampNumber(deltaRisk, 0, 1) * 0.25;
+        }
+        if (sample && sample.meta && sample.meta.safeNeighbors <= 1 && sample.meta.activeBombs > 0) {
+            reward -= 0.12;
+        }
+        return ClampNumber(reward, -2.0, 0.5);
+    },
+
+    PickMixedPolicyTag: function() {
+        var r;
+        var expertRatio = ClampNumber(BNBMLConfig.iqlMixExpertRatio, 0, 1);
+        var randomRatio = ClampNumber(BNBMLConfig.iqlMixRandomRatio, 0, 1);
+        var epsilonRatio = ClampNumber(BNBMLConfig.iqlMixEpsilonRatio, 0, 1);
+        if (!BNBMLConfig.iqlMixEnabled) {
+            return "expert";
+        }
+        r = Math.random();
+        if (r < expertRatio) {
+            return "expert";
+        }
+        if (r < expertRatio + randomRatio) {
+            return "random";
+        }
+        if (r < expertRatio + randomRatio + epsilonRatio) {
+            return "epsilon";
+        }
+        return "expert";
+    },
+
+    BuildLegalActionSet: function(monster, currentMap, snapshot, actionDim) {
+        var dim = ResolveBNBMLActionDim(actionDim);
+        var actions = [];
+        var a;
+        if (!currentMap) {
+            return [0];
+        }
+        for (a = 0; a < dim; a++) {
+            if (BNBMLRuntime
+                && typeof BNBMLRuntime.ValidateAction === "function"
+                && BNBMLRuntime.ValidateAction(a, currentMap, snapshot, monster)) {
+                actions.push(a);
+            }
+        }
+        if (actions.length <= 0) {
+            actions.push(0);
+        }
+        return actions;
+    },
+
+    BuildActionMask: function(monster, currentMap, snapshot, actionDim) {
+        var dim = ResolveBNBMLActionDim(actionDim);
+        var mask = new Array(dim);
+        var legal = this.BuildLegalActionSet(monster, currentMap, snapshot, dim);
+        var i;
+        for (i = 0; i < dim; i++) {
+            mask[i] = 0;
+        }
+        for (i = 0; i < legal.length; i++) {
+            if (legal[i] >= 0 && legal[i] < dim) {
+                mask[legal[i]] = 1;
+            }
+        }
+        return mask;
+    },
+
+    InferCombatAction: function(monster, currentMap, snapshot) {
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var nearestEnemy;
+        var attackReach;
+        var di;
+        var bx;
+        var by;
+        if (!monster || !monster.Role || !currentMap) {
+            return null;
+        }
+        if (!CanMonsterDropBombSafely(monster, currentMap, src)) {
+            return null;
+        }
+        nearestEnemy = GetNearestEnemyInfo(monster.Role, currentMap);
+        if (!nearestEnemy || !nearestEnemy.map) {
+            return null;
+        }
+        attackReach = Math.max(1, parseInt(monster.Role.PaopaoStrong || 1, 10));
+        if (nearestEnemy.dist > attackReach) {
+            return null;
+        }
+        if (typeof monster.WouldBlastReach === "function"
+            && monster.WouldBlastReach(
+                currentMap.X,
+                currentMap.Y,
+                attackReach,
+                nearestEnemy.map.X,
+                nearestEnemy.map.Y
+            )) {
+            return BNBMLActionSpace.DROP_BOMB;
+        }
+        if (nearestEnemy.dist <= 1) {
+            return BNBMLActionSpace.DROP_BOMB;
+        }
+        if (nearestEnemy.dist <= Math.max(3, attackReach + 1) && Math.random() < 0.28) {
+            return BNBMLActionSpace.DROP_BOMB;
+        }
+        for (di = 0; di < DIRS.length; di++) {
+            bx = currentMap.X + DIRS[di].dx;
+            by = currentMap.Y + DIRS[di].dy;
+            if (IsInsideMap(bx, by) && townBarrierMap[by][bx] === 3 && Math.random() < 0.22) {
+                return BNBMLActionSpace.DROP_BOMB;
+            }
+        }
+        return null;
+    },
+
+    ChooseMixedPolicyAction: function(monster, currentMap, snapshot, expertAction) {
+        var tag = this.PickMixedPolicyTag();
+        var legalActions = this.BuildLegalActionSet(
+            monster,
+            currentMap,
+            snapshot,
+            BNBMLActionSpace.MAX_DIM
+        );
+        var idx;
+        var action = expertAction;
+        var epsilonRandomProb = 0.35;
+        if (tag === "expert") {
+            return { policy_tag: "expert", action: expertAction };
+        }
+        if (tag === "random") {
+            idx = Math.floor(Math.random() * legalActions.length);
+            action = legalActions[idx];
+            return { policy_tag: "random", action: action };
+        }
+        if (tag === "epsilon") {
+            if (Math.random() < epsilonRandomProb) {
+                idx = Math.floor(Math.random() * legalActions.length);
+                action = legalActions[idx];
+            }
+            return { policy_tag: "epsilon", action: action };
+        }
+        return { policy_tag: "expert", action: expertAction };
     },
 
     InferTemporalPlanAction: function(monster, currentMap) {
@@ -497,16 +1119,113 @@ var BNBMLDatasetCollector = {
 
     FinalizeOpenSample: function(nextState, reward, done) {
         var sample = this.State.lastOpenSample;
+        var rewardValue;
+        var riskLabel;
+        var policyTag;
         if (!sample) {
             return;
         }
         sample.next_state = nextState;
-        sample.reward = typeof reward === "number" ? reward : 1;
         sample.done = !!done;
+        if (!Array.isArray(sample.action_mask) || sample.action_mask.length <= 0) {
+            sample.action_mask = new Array(BNBMLActionSpace.MAX_DIM);
+            for (var i = 0; i < BNBMLActionSpace.MAX_DIM; i++) {
+                sample.action_mask[i] = 1;
+            }
+        }
+        rewardValue = typeof reward === "number" ? reward : this.ComputeIQLReward(sample, nextState, sample.done);
+        sample.reward = rewardValue;
+        riskLabel = this.InferRiskLabel(sample, sample.done);
+        sample.risk_label = riskLabel;
+        sample.outcome_tag = this.NormalizeOutcomeTag(sample.outcome_tag, sample.pre_death, sample.done);
+        policyTag = sample.policy_tag || "expert";
+        this.State.policyTagHist[policyTag] = (this.State.policyTagHist[policyTag] || 0) + 1;
+        this.State.riskLabelHist[String(riskLabel)] = (this.State.riskLabelHist[String(riskLabel)] || 0) + 1;
         this.State.stagingRows.push(sample);
         this.State.actionHist[String(sample.action)] = (this.State.actionHist[String(sample.action)] || 0) + 1;
         this.State.samplesFinalized += 1;
+        this.State.lastFinalizedSample = sample;
         this.State.lastOpenSample = null;
+    },
+
+    FinalizeEpisode: function(outcomeTag, opts) {
+        var finalOpts = opts || {};
+        var done = finalOpts.done !== false;
+        var preDeath = !!finalOpts.preDeath;
+        var nextState = finalOpts.nextState || null;
+        var reward = typeof finalOpts.reward === "number" ? finalOpts.reward : null;
+        var normalizedOutcome = this.NormalizeOutcomeTag(outcomeTag, preDeath, done);
+        var sample = this.State.lastOpenSample;
+        var terminalRow = null;
+        var terminalRowTs = -1;
+        var maybePickTerminal = function(row) {
+            if (!row || typeof row.ts !== "number") {
+                return;
+            }
+            if (row.ts >= terminalRowTs) {
+                terminalRow = row;
+                terminalRowTs = row.ts;
+            }
+        };
+        var i;
+        var synthetic;
+        var baseSample;
+        if (!this.ShouldCollect()) {
+            return false;
+        }
+        if (preDeath) {
+            this.MarkRecentPreDeath();
+        }
+        if (sample) {
+            if (preDeath) {
+                sample.pre_death = true;
+            }
+            sample.outcome_tag = normalizedOutcome;
+            this.FinalizeOpenSample(nextState || sample.state || null, reward, done);
+        }
+        else if (done) {
+            for (i = this.State.stagingRows.length - 1; i >= 0; i--) {
+                maybePickTerminal(this.State.stagingRows[i]);
+            }
+            for (i = this.State.rowsReady.length - 1; i >= 0; i--) {
+                maybePickTerminal(this.State.rowsReady[i]);
+            }
+            if (terminalRow) {
+                terminalRow.done = true;
+                if (preDeath) {
+                    terminalRow.pre_death = true;
+                }
+                terminalRow.outcome_tag = normalizedOutcome;
+                if (typeof reward === "number") {
+                    terminalRow.reward = reward;
+                }
+                terminalRow.risk_label = this.InferRiskLabel(terminalRow, true);
+            }
+            else {
+                baseSample = this.State.lastFinalizedSample;
+                if (baseSample) {
+                    synthetic = JSON.parse(JSON.stringify(baseSample));
+                    synthetic.id = "T" + (++this.State.sampleIdSeed);
+                    synthetic.ts = Date.now();
+                    synthetic.done = true;
+                    synthetic.pre_death = preDeath || !!synthetic.pre_death;
+                    synthetic.outcome_tag = normalizedOutcome;
+                    if (typeof reward === "number") {
+                        synthetic.reward = reward;
+                    }
+                    synthetic.risk_label = this.InferRiskLabel(synthetic, true);
+                    this.State.rowsReady.push(synthetic);
+                    this.State.samplesFinalized += 1;
+                    this.State.actionHist[String(synthetic.action)] = (this.State.actionHist[String(synthetic.action)] || 0) + 1;
+                    this.State.lastFinalizedSample = synthetic;
+                }
+            }
+        }
+        if (finalOpts.forceFlush) {
+            this.FlushStagingRows(true);
+        }
+        this.PublishState();
+        return true;
     },
 
     FlushStagingRows: function(forceAll) {
@@ -536,25 +1255,34 @@ var BNBMLDatasetCollector = {
                 break;
             }
             this.State.stagingRows[i].pre_death = true;
+            this.State.stagingRows[i].risk_label = 1;
         }
         for (i = this.State.rowsReady.length - 1; i >= 0; i--) {
             if (this.State.rowsReady[i].ts < cutoff) {
                 break;
             }
             this.State.rowsReady[i].pre_death = true;
+            this.State.rowsReady[i].risk_label = 1;
         }
     },
 
-    RecordFrame: function(monster, currentMap, snapshot) {
+    RecordFrame: function(monster, currentMap, snapshot, opts) {
         var encoded;
         var choice;
         var action;
+        var combatAction;
         var actionSource = "rule";
+        var policyTag = "expert";
         var temporalAction;
+        var actionMask;
         var newSample;
         var key;
         var eta;
         var isDangerNow;
+        var episodeId;
+        var agentId;
+        var opponentId;
+        var finalOpts = opts || {};
 
         if (!this.ShouldCollect() || !monster || !monster.Role || !currentMap) {
             return;
@@ -569,6 +1297,11 @@ var BNBMLDatasetCollector = {
         encoded = BNBMLFeatureEncoder.Encode(monster.Role, currentMap, snapshot);
         choice = PickNextFrameMovementChoice(monster.Role, currentMap, snapshot);
         action = EncodeActionFromChoice(choice, currentMap);
+        combatAction = this.InferCombatAction(monster, currentMap, snapshot);
+        if (typeof combatAction === "number") {
+            action = combatAction;
+            actionSource = "combat_heuristic";
+        }
         temporalAction = this.InferTemporalPlanAction(monster, currentMap);
         if (typeof temporalAction === "number" && temporalAction >= 0 && temporalAction <= 4) {
             if (action === 0 && temporalAction !== 0) {
@@ -577,6 +1310,35 @@ var BNBMLDatasetCollector = {
             }
             else if (action === 0 && temporalAction === 0) {
                 actionSource = "temporal_plan_wait";
+            }
+        }
+        if (typeof finalOpts.actionOverride === "number") {
+            action = NormalizeActionId(finalOpts.actionOverride);
+        }
+        if (typeof finalOpts.policyTag === "string" && finalOpts.policyTag) {
+            policyTag = finalOpts.policyTag;
+            actionSource = finalOpts.policyTag;
+        }
+        actionMask = this.BuildActionMask(monster, currentMap, snapshot, BNBMLActionSpace.MAX_DIM);
+        if (action < 0 || action >= actionMask.length || actionMask[action] <= 0) {
+            action = 0;
+            actionSource += "_masked_to_wait";
+        }
+        episodeId = "runtime";
+        if (typeof window !== "undefined"
+            && window.BNBTrainingRuntimeState
+            && typeof window.BNBTrainingRuntimeState.matchIndex === "number") {
+            episodeId = "m"
+                + window.BNBTrainingRuntimeState.matchIndex
+                + "_a"
+                + (window.BNBTrainingRuntimeState.matchAttempt || 1);
+        }
+        agentId = monster && monster.Role ? ("role_" + monster.Role.RoleNumber) : "role_unknown";
+        opponentId = "none";
+        if (monster && monster.Role) {
+            var nearestEnemy = GetNearestEnemyInfo(monster.Role, currentMap);
+            if (nearestEnemy && nearestEnemy.role) {
+                opponentId = "role_" + nearestEnemy.role.RoleNumber;
             }
         }
         key = MapKey(currentMap.X, currentMap.Y);
@@ -594,7 +1356,7 @@ var BNBMLDatasetCollector = {
         }
 
         if (this.State.lastOpenSample) {
-            this.FinalizeOpenSample(encoded, 1, false);
+            this.FinalizeOpenSample(encoded, null, false);
         }
 
         newSample = {
@@ -605,16 +1367,62 @@ var BNBMLDatasetCollector = {
                 state_vector: encoded.state_vector
             },
             action: NormalizeActionId(action),
+            action_mask: actionMask,
             reward: 0,
             done: false,
             next_state: null,
             pre_death: false,
+            risk_label: 0,
+            policy_tag: policyTag,
+            episode_id: episodeId,
+            agent_id: agentId,
+            opponent_id: opponentId,
+            outcome_tag: "ongoing",
             meta: this.BuildSampleMeta(monster, currentMap, snapshot, choice)
         };
         newSample.meta.action_source = actionSource;
         this.State.lastOpenSample = newSample;
         this.FlushStagingRows(false);
         this.PublishState();
+    },
+
+    DecideTrainingBehavior: function(monster, currentMap, snapshot) {
+        var choice;
+        var action;
+        var combatAction;
+        var temporalAction;
+        var mix;
+        if (!this.ShouldCollect()) {
+            return null;
+        }
+        choice = PickNextFrameMovementChoice(monster.Role, currentMap, snapshot);
+        action = EncodeActionFromChoice(choice, currentMap);
+        combatAction = this.InferCombatAction(monster, currentMap, snapshot);
+        if (typeof combatAction === "number") {
+            action = combatAction;
+        }
+        temporalAction = this.InferTemporalPlanAction(monster, currentMap);
+        if (typeof temporalAction === "number" && temporalAction >= 0 && temporalAction <= 4 && action === 0) {
+            action = temporalAction;
+        }
+        action = NormalizeActionId(action);
+        if (!BNBMLConfig.iqlMixEnabled) {
+            return {
+                action: action,
+                policy_tag: "expert"
+            };
+        }
+        mix = this.ChooseMixedPolicyAction(monster, currentMap, snapshot, NormalizeActionId(action));
+        if (!mix) {
+            return {
+                action: action,
+                policy_tag: "expert"
+            };
+        }
+        return {
+            action: NormalizeActionId(mix.action),
+            policy_tag: mix.policy_tag
+        };
     },
 
     OnBombed: function() {
@@ -625,7 +1433,8 @@ var BNBMLDatasetCollector = {
         this.MarkRecentPreDeath();
         if (this.State.lastOpenSample) {
             this.State.lastOpenSample.pre_death = true;
-            this.FinalizeOpenSample(null, -1, true);
+            this.State.lastOpenSample.risk_label = 1;
+            this.FinalizeOpenSample(null, -2, true);
         }
         this.PublishState();
     },
@@ -653,9 +1462,11 @@ var BNBMLDatasetCollector = {
     },
 
     ForceDrainAll: function() {
+        var finalState;
         this.FlushStagingRows(true);
         if (this.State.lastOpenSample) {
-            this.FinalizeOpenSample(null, 1, false);
+            finalState = this.State.lastOpenSample.state || null;
+            this.FinalizeOpenSample(finalState, null, false);
             this.FlushStagingRows(true);
         }
         this.PublishState();
@@ -675,11 +1486,17 @@ var BNBMLDatasetCollector = {
             rows_ready: state.rowsReady.length,
             rows_staging: state.stagingRows.length,
             action_hist: JSON.parse(JSON.stringify(state.actionHist)),
+            policy_tag_hist: JSON.parse(JSON.stringify(state.policyTagHist)),
+            risk_label_hist: JSON.parse(JSON.stringify(state.riskLabelHist)),
             spawned_bubbles: state.spawnedBubblesEffective,
             spawned_bubbles_effective: state.spawnedBubblesEffective,
             spawned_bubbles_ignored_trapped: state.spawnedBubblesIgnoredTrapped,
             bombed_count: state.bombedCount,
-            survival_rate: survivalRate
+            survival_rate: survivalRate,
+            mix_enabled: !!BNBMLConfig.iqlMixEnabled,
+            mix_expert_ratio: BNBMLConfig.iqlMixExpertRatio,
+            mix_random_ratio: BNBMLConfig.iqlMixRandomRatio,
+            mix_epsilon_ratio: BNBMLConfig.iqlMixEpsilonRatio
         };
     }
 };
@@ -699,7 +1516,8 @@ var BNBMLRuntime = {
         usedCount: 0,
         fallbackCount: 0,
         avgLatencyMs: 0,
-        actionHist: { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0 },
+        modelActionDim: BNBMLActionSpace.MAX_DIM,
+        actionHist: BuildBNBMLActionHistTemplate(BNBMLActionSpace.MAX_DIM),
         spawnedBubblesEffective: 0,
         spawnedBubblesIgnoredTrapped: 0,
         bombedCount: 0,
@@ -707,7 +1525,9 @@ var BNBMLRuntime = {
         lastFallbackReason: "",
         decisionTrace: [],
         lastDecisionLogAt: 0,
-        lastDecisionLogSig: ""
+        lastDecisionLogSig: "",
+        ruleCalls: 0,
+        pureViolationCount: 0
     },
 
     Init: function() {
@@ -718,7 +1538,8 @@ var BNBMLRuntime = {
         this.State.usedCount = 0;
         this.State.fallbackCount = 0;
         this.State.avgLatencyMs = 0;
-        this.State.actionHist = { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0 };
+        this.State.modelActionDim = BNBMLActionSpace.MAX_DIM;
+        this.State.actionHist = BuildBNBMLActionHistTemplate(BNBMLActionSpace.MAX_DIM);
         this.State.latestPrediction = null;
         this.State.spawnedBubblesEffective = 0;
         this.State.spawnedBubblesIgnoredTrapped = 0;
@@ -728,6 +1549,8 @@ var BNBMLRuntime = {
         this.State.decisionTrace = [];
         this.State.lastDecisionLogAt = 0;
         this.State.lastDecisionLogSig = "";
+        this.State.ruleCalls = 0;
+        this.State.pureViolationCount = 0;
         this.State.error = "";
         this.PublishState();
     },
@@ -739,13 +1562,13 @@ var BNBMLRuntime = {
         if (!this.State.enabled || !currentMap) {
             return false;
         }
-        if (CountActiveBombs() <= 0) {
-            return false;
-        }
         key = MapKey(currentMap.X, currentMap.Y);
         eta = src && src.dangerEtaMap ? src.dangerEtaMap[key] : null;
         if (src && src.threatMap && src.threatMap[key]) {
             return true;
+        }
+        if (CountActiveBombs() <= 0 && !(typeof eta === "number")) {
+            return false;
         }
         return typeof eta === "number" && eta <= Math.max(620, AIDodgePolicy.safeBufferMs + 320);
     },
@@ -846,7 +1669,58 @@ var BNBMLRuntime = {
         };
     },
 
-    ValidateAction: function(action, currentMap, snapshot) {
+    DecodeModelOutputs: function(outputs, outputNames) {
+        var keys = outputNames && outputNames.length ? outputNames.slice(0) : Object.keys(outputs || {});
+        var i;
+        var key;
+        var tensor;
+        var data;
+        var logits = null;
+        var logitsLen = 0;
+        var riskLogit = null;
+        var lower;
+        for (i = 0; i < keys.length; i++) {
+            key = keys[i];
+            tensor = outputs[key];
+            if (!tensor || !tensor.data) {
+                continue;
+            }
+            data = tensor.data;
+            lower = String(key || "").toLowerCase();
+            if (lower.indexOf("risk") !== -1 && data.length >= 1) {
+                riskLogit = data[0];
+                continue;
+            }
+            if (data.length >= 2 && data.length > logitsLen) {
+                logits = data;
+                logitsLen = data.length;
+                continue;
+            }
+            if (data.length === 1 && riskLogit == null) {
+                riskLogit = data[0];
+            }
+        }
+        if (!logits) {
+            for (i = 0; i < keys.length; i++) {
+                key = keys[i];
+                tensor = outputs[key];
+                if (tensor && tensor.data && tensor.data.length >= 2) {
+                    logits = tensor.data;
+                    logitsLen = tensor.data.length;
+                    break;
+                }
+            }
+        }
+        logitsLen = logits ? logits.length : 0;
+        logitsLen = ResolveBNBMLModelActionDim(logitsLen);
+        return {
+            logits: logits ? Array.prototype.slice.call(logits, 0, logitsLen) : [],
+            risk_score: typeof riskLogit === "number" ? (1 / (1 + Math.exp(-riskLogit))) : null,
+            action_dim: logitsLen
+        };
+    },
+
+    ValidateAction: function(action, currentMap, snapshot, monster) {
         var a = NormalizeActionId(action);
         var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
         var target;
@@ -863,6 +1737,9 @@ var BNBMLRuntime = {
                 return false;
             }
             return true;
+        }
+        if (a === BNBMLActionSpace.DROP_BOMB) {
+            return CanMonsterDropBombSafely(monster, currentMap, src);
         }
         target = BuildTargetMapByAction(currentMap, a);
         if (!IsAIWalkable(target.X, target.Y)) {
@@ -910,6 +1787,7 @@ var BNBMLRuntime = {
         var top1;
         var top2;
         var eta;
+        var pureMode = IsBNBMLPurePolicyMode();
         if (!currentMap) {
             return false;
         }
@@ -928,7 +1806,7 @@ var BNBMLRuntime = {
             }
             return true;
         }
-        if (confidence < Math.max(this.State.minConfidence, BNBMLConfig.minMoveConfidence || 0.4)) {
+        if (!pureMode && confidence < Math.max(this.State.minConfidence, BNBMLConfig.minMoveConfidence || 0.4)) {
             return false;
         }
         return true;
@@ -965,12 +1843,11 @@ var BNBMLRuntime = {
 
         this.State.inflight = true;
         session.run({
-            [mapName]: new window.ort.Tensor("float32", mapTensor, [1, 5, encoded.state_map.length, encoded.state_map[0].length]),
+            [mapName]: new window.ort.Tensor("float32", mapTensor, [1, encoded.state_map[0][0].length, encoded.state_map.length, encoded.state_map[0].length]),
             [vecName]: new window.ort.Tensor("float32", vectorTensor, [1, vectorTensor.length])
         }).then(function(outputs) {
-            var outName = outputNames.length > 0 ? outputNames[0] : Object.keys(outputs)[0];
-            var data = outputs[outName] && outputs[outName].data ? outputs[outName].data : [];
-            var decoded = self.SoftmaxArgmax(data);
+            var decodedOutputs = self.DecodeModelOutputs(outputs, outputNames);
+            var decoded = self.SoftmaxArgmax(decodedOutputs.logits);
             var latency = Date.now() - startedAt;
             self.State.inferenceCount += 1;
             self.State.avgLatencyMs = self.State.avgLatencyMs <= 0
@@ -981,8 +1858,11 @@ var BNBMLRuntime = {
                 action: NormalizeActionId(decoded.action),
                 confidence: decoded.confidence,
                 probs: decoded.probs,
+                risk_score: decodedOutputs.risk_score,
+                action_dim: ResolveBNBMLModelActionDim(decodedOutputs.action_dim),
                 mapKey: MapKey(currentMap.X, currentMap.Y)
             };
+            self.State.modelActionDim = ResolveBNBMLModelActionDim(decodedOutputs.action_dim);
             self.State.inflight = false;
             self.PublishState();
         }).catch(function(err) {
@@ -996,9 +1876,14 @@ var BNBMLRuntime = {
         var pred = this.State.latestPrediction;
         var now = Date.now();
         var ranked;
+        var actionDim;
         var i;
         var candidate;
         var conf;
+        var pureMode = IsBNBMLPurePolicyMode();
+        var predictionMaxAge = pureMode
+            ? Math.max(360, Math.max(120, BNBMLConfig.predictionReuseMs || 240) * 3)
+            : Math.max(120, BNBMLConfig.predictionReuseMs || 240);
         if (!this.State.enabled || !monster || !monster.Role || !currentMap) {
             return { ok: false, reason: "disabled_or_invalid" };
         }
@@ -1006,24 +1891,36 @@ var BNBMLRuntime = {
         if (this.State.session) {
             this.SchedulePrediction(monster.Role, currentMap, snapshot);
         }
-        if (!pred || now - pred.ts > Math.max(120, BNBMLConfig.predictionReuseMs || 240)) {
-            this.State.fallbackCount += 1;
+        if (!pred || now - pred.ts > predictionMaxAge) {
+            if (!pureMode) {
+                this.State.fallbackCount += 1;
+            }
             this.PublishState();
             return { ok: false, reason: "prediction_not_ready" };
         }
-        if (pred.confidence < this.State.minConfidence) {
-            this.State.fallbackCount += 1;
+        if (!pureMode && pred.confidence < this.State.minConfidence) {
+            if (!pureMode) {
+                this.State.fallbackCount += 1;
+            }
             this.PublishState();
             return { ok: false, reason: "low_confidence" };
         }
 
-        ranked = [0, 1, 2, 3, 4];
+        actionDim = ResolveBNBMLModelActionDim(
+            pred && typeof pred.action_dim === "number"
+                ? pred.action_dim
+                : (pred && pred.probs ? pred.probs.length : BNBMLActionSpace.MAX_DIM)
+        );
+        ranked = [];
+        for (i = 0; i < actionDim; i++) {
+            ranked.push(i);
+        }
         ranked.sort(function(a, b) {
             return (pred.probs[b] || 0) - (pred.probs[a] || 0);
         });
         candidate = null;
         for (i = 0; i < ranked.length; i++) {
-            if (this.ValidateAction(ranked[i], currentMap, snapshot)) {
+            if (this.ValidateAction(ranked[i], currentMap, snapshot, monster)) {
                 conf = pred.probs && pred.probs[ranked[i]] != null ? pred.probs[ranked[i]] : pred.confidence;
                 if (this.PassGuardrail(ranked[i], conf, currentMap, snapshot, ranked, pred)) {
                     candidate = ranked[i];
@@ -1032,7 +1929,9 @@ var BNBMLRuntime = {
             }
         }
         if (candidate == null) {
-            this.State.fallbackCount += 1;
+            if (!pureMode) {
+                this.State.fallbackCount += 1;
+            }
             this.PublishState();
             return { ok: false, reason: "guardrail_rejected" };
         }
@@ -1042,7 +1941,8 @@ var BNBMLRuntime = {
         return {
             ok: true,
             action: candidate,
-            confidence: pred.probs && pred.probs[candidate] != null ? pred.probs[candidate] : pred.confidence
+            confidence: pred.probs && pred.probs[candidate] != null ? pred.probs[candidate] : pred.confidence,
+            risk_score: typeof pred.risk_score === "number" ? pred.risk_score : null
         };
     },
 
@@ -1064,11 +1964,13 @@ var BNBMLRuntime = {
         msg = "[BNB-ML][battle] source=" + (item.source || "unknown")
             + " reason=" + (item.reason || "")
             + " conf=" + (typeof item.confidence === "number" ? item.confidence.toFixed(3) : "na")
+            + " risk=" + (typeof item.risk_score === "number" ? item.risk_score.toFixed(3) : "na")
             + " start=" + (item.start || "(-,-)")
             + " path=" + (item.path || "n/a");
         sig = (item.source || "")
             + "|" + (item.reason || "")
             + "|" + (item.fallback_reason || "")
+            + "|" + (typeof item.risk_score === "number" ? item.risk_score.toFixed(4) : "na")
             + "|" + (item.start || "")
             + "|" + (item.path || "");
         now = item.ts;
@@ -1083,12 +1985,13 @@ var BNBMLRuntime = {
         this.PublishState();
     },
 
-    RecordModelDecision: function(currentMap, targetMap, action, confidence) {
+    RecordModelDecision: function(currentMap, targetMap, action, confidence, riskScore, reasonTag) {
         this.AppendDecisionTrace({
             source: "model",
-            reason: "model_action",
+            reason: reasonTag || "model_action",
             fallback_reason: "",
             confidence: typeof confidence === "number" ? confidence : null,
+            risk_score: typeof riskScore === "number" ? riskScore : null,
             action: NormalizeActionId(action),
             start: FormatMapPos(currentMap),
             path: FormatDecisionPathText(currentMap, targetMap, action)
@@ -1101,6 +2004,7 @@ var BNBMLRuntime = {
             reason: reason || "rule_dodge",
             fallback_reason: reason || "",
             confidence: null,
+            risk_score: null,
             action: targetMap && currentMap && targetMap.X === currentMap.X && targetMap.Y === currentMap.Y ? 0 : null,
             start: FormatMapPos(currentMap),
             path: FormatDecisionPathText(
@@ -1109,6 +2013,15 @@ var BNBMLRuntime = {
                 targetMap && currentMap && targetMap.X === currentMap.X && targetMap.Y === currentMap.Y ? 0 : 4
             )
         });
+    },
+
+    RecordRuleCall: function(reason) {
+        this.State.ruleCalls += 1;
+        if (IsBNBMLPurePolicyMode()) {
+            this.State.pureViolationCount += 1;
+            this.State.lastFallbackReason = reason || "pure_mode_rule_call";
+        }
+        this.PublishState();
     },
 
     OnBubbleSpawned: function(role) {
@@ -1137,6 +2050,7 @@ var BNBMLRuntime = {
         window.BNBMLRuntimeState = {
             enabled: !!s.enabled,
             model_url: s.modelUrl,
+            policy_mode: BNBMLConfig.policyMode || "pure",
             min_confidence: s.minConfidence,
             min_move_confidence: BNBMLConfig.minMoveConfidence,
             top1_margin: BNBMLConfig.top1Margin,
@@ -1151,11 +2065,14 @@ var BNBMLRuntime = {
             fallback_count: s.fallbackCount,
             fallback_rate: fallbackRate,
             avg_latency_ms: s.avgLatencyMs,
+            model_action_dim: s.modelActionDim,
             action_hist: JSON.parse(JSON.stringify(s.actionHist)),
             latest_prediction: s.latestPrediction ? {
                 ts: s.latestPrediction.ts,
                 action: s.latestPrediction.action,
                 confidence: s.latestPrediction.confidence,
+                risk_score: typeof s.latestPrediction.risk_score === "number" ? s.latestPrediction.risk_score : null,
+                action_dim: s.latestPrediction.action_dim || s.modelActionDim || BNBMLActionSpace.MAX_DIM,
                 mapKey: s.latestPrediction.mapKey
             } : null,
             spawned_bubbles: s.spawnedBubblesEffective,
@@ -1163,6 +2080,8 @@ var BNBMLRuntime = {
             spawned_bubbles_ignored_trapped: s.spawnedBubblesIgnoredTrapped,
             bombed_count: s.bombedCount,
             survival_rate: survivalRate,
+            rule_calls: s.ruleCalls,
+            pure_violation_count: s.pureViolationCount,
             last_decision_source: s.lastDecisionSource,
             last_fallback_reason: s.lastFallbackReason,
             decision_trace_tail: s.decisionTrace.slice(Math.max(0, s.decisionTrace.length - 20))
@@ -1180,6 +2099,9 @@ if (typeof window !== "undefined") {
     };
     window.BNBMLCollectorDrainAll = function() {
         return BNBMLDatasetCollector.ForceDrainAll();
+    };
+    window.BNBMLCollectorFinalizeEpisode = function(outcomeTag, opts) {
+        return BNBMLDatasetCollector.FinalizeEpisode(outcomeTag, opts || {});
     };
     window.BNBMLRefreshConfig = function() {
         RefreshBNBMLConfigFromQuery();
@@ -2876,6 +3798,9 @@ Monster.prototype.Think = function() {
         var safe = this.FindSafeTile(currentMap, threatMap, threatSnapshot);
         if (safe) {
             this.MoveToMap(safe);
+            if (BNBMLRuntime && typeof BNBMLRuntime.RecordRuleCall === "function") {
+                BNBMLRuntime.RecordRuleCall("rule_evade_move");
+            }
             if (BNBMLRuntime && typeof BNBMLRuntime.RecordRuleDecision === "function") {
                 BNBMLRuntime.RecordRuleDecision(
                     currentMap,
@@ -2885,6 +3810,9 @@ Monster.prototype.Think = function() {
             }
         }
         else {
+            if (BNBMLRuntime && typeof BNBMLRuntime.RecordRuleCall === "function") {
+                BNBMLRuntime.RecordRuleCall("rule_evade_wait");
+            }
             if (BNBMLRuntime && typeof BNBMLRuntime.RecordRuleDecision === "function") {
                 BNBMLRuntime.RecordRuleDecision(
                     currentMap,
@@ -3037,11 +3965,32 @@ Monster.prototype.TryOfflineMLDodgeAction = function(currentMap, threatSnapshot,
     var decision;
     var action;
     var targetMap;
+    var pureMode = IsBNBMLPurePolicyMode();
     if (!currentMap || !BNBMLRuntime || !BNBMLRuntime.ShouldUseContext(currentMap, snapshot)) {
         return { handled: false, attempted: false, reason: "context_not_applicable" };
     }
     decision = BNBMLRuntime.DecideAction(this, currentMap, snapshot);
     if (!decision || !decision.ok) {
+        if (pureMode) {
+            this.Role.Stop();
+            this.State = modeTag === "training" ? "ml_dodge_training_wait" : "ml_dodge_wait";
+            if (modeTag === "battle" && typeof BNBMLRuntime.RecordModelDecision === "function") {
+                BNBMLRuntime.RecordModelDecision(
+                    currentMap,
+                    currentMap,
+                    0,
+                    null,
+                    null,
+                    "pure_wait_" + (decision && decision.reason ? decision.reason : "decision_failed")
+                );
+            }
+            return {
+                handled: true,
+                attempted: true,
+                reason: "pure_model_wait_" + (decision && decision.reason ? decision.reason : "decision_failed"),
+                action: 0
+            };
+        }
         return {
             handled: false,
             attempted: true,
@@ -3053,18 +4002,80 @@ Monster.prototype.TryOfflineMLDodgeAction = function(currentMap, threatSnapshot,
         this.Role.Stop();
         this.State = modeTag === "training" ? "ml_dodge_training_wait" : "ml_dodge_wait";
         if (modeTag === "battle" && typeof BNBMLRuntime.RecordModelDecision === "function") {
-            BNBMLRuntime.RecordModelDecision(currentMap, currentMap, action, decision.confidence);
+            BNBMLRuntime.RecordModelDecision(
+                currentMap,
+                currentMap,
+                action,
+                decision.confidence,
+                decision.risk_score,
+                "model_wait"
+            );
         }
         return { handled: true, attempted: true, reason: "model_wait", action: action };
     }
+    if (action === BNBMLActionSpace.DROP_BOMB) {
+        var bombEscape = GetMonsterBombEscapeTarget(this, currentMap, snapshot);
+        if (!this.CanDropBomb() || !bombEscape) {
+            if (pureMode) {
+                this.Role.Stop();
+                if (modeTag === "battle" && typeof BNBMLRuntime.RecordModelDecision === "function") {
+                    BNBMLRuntime.RecordModelDecision(
+                        currentMap,
+                        currentMap,
+                        0,
+                        decision.confidence,
+                        decision.risk_score,
+                        "pure_wait_invalid_drop_bomb"
+                    );
+                }
+                return { handled: true, attempted: true, reason: "pure_model_wait_invalid_drop_bomb", action: 0 };
+            }
+            return { handled: false, attempted: true, reason: "model_action_invalid_drop_bomb" };
+        }
+        this.DropBomb();
+        this.MoveToMap(bombEscape, true);
+        this.State = modeTag === "training" ? "ml_dodge_training_drop_bomb" : "ml_dodge_drop_bomb";
+        if (modeTag === "battle" && typeof BNBMLRuntime.RecordModelDecision === "function") {
+            BNBMLRuntime.RecordModelDecision(
+                currentMap,
+                bombEscape,
+                action,
+                decision.confidence,
+                decision.risk_score,
+                "model_drop_bomb"
+            );
+        }
+        return { handled: true, attempted: true, reason: "model_drop_bomb", action: action };
+    }
     targetMap = BuildTargetMapByAction(currentMap, action);
     if (!targetMap || !IsAIWalkable(targetMap.X, targetMap.Y)) {
+        if (pureMode) {
+            this.Role.Stop();
+            if (modeTag === "battle" && typeof BNBMLRuntime.RecordModelDecision === "function") {
+                BNBMLRuntime.RecordModelDecision(
+                    currentMap,
+                    currentMap,
+                    0,
+                    decision.confidence,
+                    decision.risk_score,
+                    "pure_wait_invalid_target"
+                );
+            }
+            return { handled: true, attempted: true, reason: "pure_model_wait_invalid_target", action: 0 };
+        }
         return { handled: false, attempted: true, reason: "model_action_invalid_target" };
     }
     this.MoveToMap(targetMap, true);
     this.State = modeTag === "training" ? "ml_dodge_training_move" : "ml_dodge_move";
     if (modeTag === "battle" && typeof BNBMLRuntime.RecordModelDecision === "function") {
-        BNBMLRuntime.RecordModelDecision(currentMap, targetMap, action, decision.confidence);
+        BNBMLRuntime.RecordModelDecision(
+            currentMap,
+            targetMap,
+            action,
+            decision.confidence,
+            decision.risk_score,
+            "model_move"
+        );
     }
     return { handled: true, attempted: true, reason: "model_move", action: action };
 };
@@ -3422,8 +4433,50 @@ Monster.prototype.ThinkDodgeTraining = function(currentMap, threatMap, threatSna
         && this.CurrentTemporalPlan.cursor < this.CurrentTemporalPlan.route.length
         ? this.CurrentTemporalPlan.route[this.CurrentTemporalPlan.cursor]
         : null;
+    var mixedBehavior = BNBMLDatasetCollector.DecideTrainingBehavior(this, currentMap, threatSnapshot);
+    var forcedTarget;
 
-    BNBMLDatasetCollector.RecordFrame(this, currentMap, threatSnapshot);
+    if (mixedBehavior && typeof mixedBehavior.action === "number") {
+        if (mixedBehavior.action === 0) {
+            this.Role.Stop();
+            this.State = "iql_mix_" + mixedBehavior.policy_tag + "_wait";
+        }
+        else if (mixedBehavior.action === BNBMLActionSpace.DROP_BOMB) {
+            if (CanMonsterDropBombSafely(this, currentMap, threatSnapshot)) {
+                var combatEscape = GetMonsterBombEscapeTarget(this, currentMap, threatSnapshot);
+                this.DropBomb();
+                if (combatEscape) {
+                    this.MoveToMap(combatEscape, true);
+                }
+                this.State = "iql_mix_" + mixedBehavior.policy_tag + "_drop_bomb";
+            }
+            else {
+                mixedBehavior.action = 0;
+                this.Role.Stop();
+                this.State = "iql_mix_wait";
+            }
+        }
+        else {
+            forcedTarget = BuildTargetMapByAction(currentMap, mixedBehavior.action);
+            if (forcedTarget && IsAIWalkable(forcedTarget.X, forcedTarget.Y)) {
+                this.MoveToMap(forcedTarget, true);
+                this.State = "iql_mix_" + mixedBehavior.policy_tag;
+            }
+            else {
+                mixedBehavior.action = 0;
+                this.Role.Stop();
+                this.State = "iql_mix_wait";
+            }
+        }
+        BNBMLDatasetCollector.RecordFrame(this, currentMap, threatSnapshot, {
+            actionOverride: mixedBehavior.action,
+            policyTag: mixedBehavior.policy_tag,
+            noMixSampling: true
+        });
+        return;
+    }
+
+    BNBMLDatasetCollector.RecordFrame(this, currentMap, threatSnapshot, { noMixSampling: true });
     var mlDecision = this.TryOfflineMLDodgeAction(currentMap, threatSnapshot, "training");
     if (mlDecision && mlDecision.handled) {
         return;

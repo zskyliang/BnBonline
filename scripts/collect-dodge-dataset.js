@@ -8,9 +8,9 @@ const skillPlaywrightPath = path.join(
 const { chromium } = require(skillPlaywrightPath);
 
 const OUT_ROOT = path.resolve(__dirname, "../output/ml");
-const DATASET_PATH_DEFAULT = path.join(OUT_ROOT, "datasets", "dodge_bc_v1.jsonl");
-const REPORT_PATH_DEFAULT = path.join(OUT_ROOT, "reports", "dodge_bc_v1_collect_stats.json");
-const SCREENSHOT_PATH_DEFAULT = path.join(OUT_ROOT, "reports", "dodge_bc_v1_collect_final.png");
+const DATASET_PATH_DEFAULT = path.join(OUT_ROOT, "datasets", "dodge_iql_v1_mixed_200k.jsonl");
+const REPORT_PATH_DEFAULT = path.join(OUT_ROOT, "reports", "dodge_iql_v1_collect_stats.json");
+const SCREENSHOT_PATH_DEFAULT = path.join(OUT_ROOT, "reports", "dodge_iql_v1_collect_final.png");
 const URL_BASE = "http://127.0.0.1:4000/?train=1&autostart=0&ml_collect=1&ml_freeze=1&ml_wait_keep=1";
 
 function getArg(name, fallback) {
@@ -38,6 +38,13 @@ function normalizeAction(v) {
     return Number.isFinite(a) && a >= 0 && a <= 4 ? a : 0;
 }
 
+function normalizePolicyTag(v) {
+    if (v === "random" || v === "epsilon" || v === "expert") {
+        return v;
+    }
+    return "expert";
+}
+
 async function ensureServerReady(url) {
     const maxRetry = 30;
     for (let i = 0; i < maxRetry; i++) {
@@ -53,7 +60,7 @@ async function ensureServerReady(url) {
 }
 
 async function main() {
-    const targetFrames = asInt(getArg("target-frames", "600000"), 600000);
+    const targetFrames = asInt(getArg("target-frames", "200000"), 200000);
     const batchSize = asInt(getArg("batch-size", "2048"), 2048);
     const pollMs = asInt(getArg("poll-ms", "500"), 500);
     const fresh = getArg("fresh", "1") !== "0";
@@ -65,10 +72,27 @@ async function main() {
     const quotaRelaxStep = Math.min(0.3, Math.max(0.01, asFloat(getArg("quota-relax-step", "0.08"), 0.08)));
     const quotaWarmupRows = asInt(getArg("quota-warmup-rows", "800"), 800);
     const thinkIntervalMs = asInt(getArg("think-interval-ms", "8"), 8);
+    const policyMode = getArg("policy-mode", "pure");
+    const iqlMixEnabled = getArg("iql-mix", "1") !== "0";
+    let mixExpertRatio = asFloat(getArg("mix-expert-ratio", "0.6"), 0.6);
+    let mixRandomRatio = asFloat(getArg("mix-random-ratio", "0.2"), 0.2);
+    let mixEpsilonRatio = asFloat(getArg("mix-epsilon-ratio", "0.2"), 0.2);
+    const policyBalanceEnabled = getArg("policy-balance-enabled", "1") !== "0";
+    const policyBalanceSlack = Math.max(0, Math.min(0.3, asFloat(getArg("policy-balance-slack", "0.06"), 0.06)));
+    const mixSum = Math.max(1e-6, Math.max(0, mixExpertRatio) + Math.max(0, mixRandomRatio) + Math.max(0, mixEpsilonRatio));
+    mixExpertRatio = Math.max(0, mixExpertRatio) / mixSum;
+    mixRandomRatio = Math.max(0, mixRandomRatio) / mixSum;
+    mixEpsilonRatio = Math.max(0, mixEpsilonRatio) / mixSum;
     const datasetPath = path.resolve(getArg("dataset-path", DATASET_PATH_DEFAULT));
     const reportPath = path.resolve(getArg("report-path", REPORT_PATH_DEFAULT));
     const screenshotPath = path.resolve(getArg("screenshot-path", SCREENSHOT_PATH_DEFAULT));
-    const url = URL_BASE + "&ml=" + (mlRuntimeEnabled ? "1" : "0");
+    const url = URL_BASE
+        + "&ml=" + (mlRuntimeEnabled ? "1" : "0")
+        + "&ml_policy_mode=" + encodeURIComponent(policyMode)
+        + "&ml_iql_mix=" + (iqlMixEnabled ? "1" : "0")
+        + "&ml_mix_expert=" + encodeURIComponent(String(mixExpertRatio))
+        + "&ml_mix_random=" + encodeURIComponent(String(mixRandomRatio))
+        + "&ml_mix_epsilon=" + encodeURIComponent(String(mixEpsilonRatio));
 
     fs.mkdirSync(path.dirname(datasetPath), { recursive: true });
     fs.mkdirSync(path.dirname(reportPath), { recursive: true });
@@ -111,10 +135,12 @@ async function main() {
     const startedAt = Date.now();
     let wrote = 0;
     let droppedByQuota = 0;
+    let droppedByPolicyBalance = 0;
     let quotaScale = 1;
     let waitMaxRatio = waitMaxRatioBase;
     let lastAcceptAt = Date.now();
     const acceptedActionHist = { "0": 0, "1": 0, "2": 0, "3": 0, "4": 0 };
+    const acceptedPolicyTagHist = { expert: 0, random: 0, epsilon: 0 };
     let lastLogAt = 0;
     let lastState = null;
 
@@ -134,9 +160,13 @@ async function main() {
 
     function shouldAcceptRow(row) {
         const action = normalizeAction(row && row.action);
+        const policyTag = normalizePolicyTag(row && row.policy_tag);
         const nextTotal = wrote + 1;
         if (!quotaEnabled) {
-            return true;
+            if (!policyBalanceEnabled || !iqlMixEnabled) {
+                return true;
+            }
+            return shouldAcceptByPolicyMix(policyTag, nextTotal);
         }
         if (wrote < quotaWarmupRows) {
             return true;
@@ -153,7 +183,24 @@ async function main() {
         if (remaining < moveNeed) {
             return false;
         }
+        if (policyBalanceEnabled && iqlMixEnabled && !shouldAcceptByPolicyMix(policyTag, nextTotal)) {
+            return false;
+        }
         return true;
+    }
+
+    function shouldAcceptByPolicyMix(tag, nextTotal) {
+        const targetRatio =
+            tag === "random" ? mixRandomRatio :
+            tag === "epsilon" ? mixEpsilonRatio :
+            mixExpertRatio;
+        const projected = (acceptedPolicyTagHist[tag] || 0) + 1;
+        const target = nextTotal * targetRatio;
+        const slackAbs = Math.max(30, nextTotal * policyBalanceSlack);
+        if (projected <= target + slackAbs) {
+            return true;
+        }
+        return false;
     }
 
     try {
@@ -185,13 +232,20 @@ async function main() {
             if (batch.length > 0) {
                 for (const row of batch) {
                     const action = normalizeAction(row && row.action);
+                    const policyTag = normalizePolicyTag(row && row.policy_tag);
                     if (!shouldAcceptRow(row)) {
-                        droppedByQuota += 1;
+                        if (policyBalanceEnabled && iqlMixEnabled && !shouldAcceptByPolicyMix(policyTag, wrote + 1)) {
+                            droppedByPolicyBalance += 1;
+                        }
+                        else {
+                            droppedByQuota += 1;
+                        }
                         continue;
                     }
                     stream.write(JSON.stringify(row) + "\n");
                     wrote += 1;
                     acceptedActionHist[String(action)] = (acceptedActionHist[String(action)] || 0) + 1;
+                    acceptedPolicyTagHist[policyTag] = (acceptedPolicyTagHist[policyTag] || 0) + 1;
                     lastAcceptAt = Date.now();
                     if (wrote >= targetFrames) {
                         break;
@@ -223,6 +277,7 @@ async function main() {
                     "quota_scale=" + quotaScale.toFixed(2),
                     "wait_max=" + waitMaxRatio.toFixed(2),
                     "drop_quota=" + droppedByQuota,
+                    "drop_policy=" + droppedByPolicyBalance,
                     "match=" + (t.matchIndex || 0),
                     "attempt=" + (t.matchAttempt || 0)
                 );
@@ -257,13 +312,20 @@ async function main() {
                 break;
             }
             const action = normalizeAction(row && row.action);
+            const policyTag = normalizePolicyTag(row && row.policy_tag);
             if (!shouldAcceptRow(row)) {
-                droppedByQuota += 1;
+                if (policyBalanceEnabled && iqlMixEnabled && !shouldAcceptByPolicyMix(policyTag, wrote + 1)) {
+                    droppedByPolicyBalance += 1;
+                }
+                else {
+                    droppedByQuota += 1;
+                }
                 continue;
             }
             stream.write(JSON.stringify(row) + "\n");
             wrote += 1;
             acceptedActionHist[String(action)] = (acceptedActionHist[String(action)] || 0) + 1;
+            acceptedPolicyTagHist[policyTag] = (acceptedPolicyTagHist[policyTag] || 0) + 1;
         }
 
         await page.screenshot({ path: screenshotPath, fullPage: true });
@@ -290,6 +352,7 @@ async function main() {
         action_hist: collector.action_hist || {},
         action_hist_written: acceptedActionHist,
         dropped_by_quota: droppedByQuota,
+        dropped_by_policy_balance: droppedByPolicyBalance,
         quota_enabled: quotaEnabled,
         quota_scale_final: quotaScale,
         wait_max_ratio_final: waitMaxRatio,
@@ -297,6 +360,18 @@ async function main() {
         min_move_ratio_base: minMoveRatioBase,
         pre_death_window_ms: collector.pre_death_window_ms || null,
         fallback_rate: typeof runtime.fallback_rate === "number" ? runtime.fallback_rate : 0,
+        rule_calls: runtime.rule_calls || 0,
+        pure_violation_count: runtime.pure_violation_count || 0,
+        policy_tag_hist: collector.policy_tag_hist || {},
+        policy_tag_hist_written: acceptedPolicyTagHist,
+        risk_label_hist: collector.risk_label_hist || {},
+        policy_mode: policyMode,
+        iql_mix_enabled: iqlMixEnabled,
+        policy_balance_enabled: policyBalanceEnabled,
+        policy_balance_slack: policyBalanceSlack,
+        mix_expert_ratio: mixExpertRatio,
+        mix_random_ratio: mixRandomRatio,
+        mix_epsilon_ratio: mixEpsilonRatio,
         screenshot: screenshotPath
     };
 
