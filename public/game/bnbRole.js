@@ -364,6 +364,57 @@ var Role = function(number) {
         this.PaopaoStrong = ClampRolePower(this.PaopaoStrong + addNum);
     }
 
+    // 尝试拾取当前脚下道具：用于到达目标后静止帧补拾取，避免“贴边卡住不吃”
+    this.TryPickupCurrentTileItem = function() {
+        var currentMapID;
+        var cellNo;
+        var itemObj = null;
+        if (this.MoveHorse == MoveHorseObject.UFO) {
+            return false;
+        }
+        currentMapID = this.CurrentMapID();
+        if (!currentMapID || !townBarrierMap[currentMapID.Y]) {
+            return false;
+        }
+        cellNo = townBarrierMap[currentMapID.Y][currentMapID.X];
+        if (!(cellNo > 100)) {
+            return false;
+        }
+
+        if (typeof SystemSound !== "undefined" && typeof SystemSound.Play === "function") {
+            SystemSound.Play(SoundType.Get);
+        }
+        if (typeof Barrier !== "undefined"
+            && Barrier
+            && Barrier.Storage
+            && Barrier.Storage[currentMapID.Y]
+            && Barrier.Storage[currentMapID.Y][currentMapID.X]) {
+            itemObj = Barrier.Storage[currentMapID.Y][currentMapID.X].Object;
+        }
+        if (itemObj && typeof itemObj.Dispose === "function") {
+            itemObj.Dispose();
+        }
+
+        switch (cellNo) {
+            //加泡泡次数
+            case 101:
+                this.AddPaopaoLength(RoleBalanceConfig.BubblePerItem);
+                break;
+            //速度 +25px/s
+            case 102:
+                this.AddMoveSpeedPxPerSec(RoleBalanceConfig.SpeedPerItemPxPerSec);
+                break;
+            //泡泡强度 +1 格
+            case 103:
+                this.AddPaopaoStrong(RoleBalanceConfig.PowerPerItem);
+                break;
+            default:
+                break;
+        }
+        townBarrierMap[currentMapID.Y][currentMapID.X] = 0;
+        return true;
+    }
+
     //下一个区块是否可以通过
     this.IsCanMoveNext = function(diretion) {
         var currentMapID = FindMapID(this.CenterPoint());
@@ -490,32 +541,7 @@ var Role = function(number) {
                     }
                 }
 
-                if (this.MoveHorse != MoveHorseObject.UFO) {
-                    //捡宝物
-                    if (townBarrierMap[currentMapID.Y][currentMapID.X] > 100) {
-                        SystemSound.Play(SoundType.Get);
-                        Barrier.Storage[currentMapID.Y][currentMapID.X].Object.Dispose();
-
-                        //捡宝物后的属性
-                        switch (townBarrierMap[currentMapID.Y][currentMapID.X]) {
-                            //加泡泡次数                                         
-                            case 101:
-                                this.AddPaopaoLength(RoleBalanceConfig.BubblePerItem);
-                                break;
-                            //速度 +25px/s                                         
-                            case 102:
-                                this.AddMoveSpeedPxPerSec(RoleBalanceConfig.SpeedPerItemPxPerSec);
-                                break;
-                            //泡泡强度 +1 格                                         
-                            case 103:
-                                this.AddPaopaoStrong(RoleBalanceConfig.PowerPerItem);
-                                break;
-                            default:
-                                break;
-                        }
-                        townBarrierMap[currentMapID.Y][currentMapID.X] = 0;
-                    }
-                }
+                this.TryPickupCurrentTileItem();
             }
             return result;
         }
@@ -537,6 +563,7 @@ var Role = function(number) {
                 this.Object.StartPoint = new Point(0, this.Object.Size.Height * this.Direction);
             }
         }
+        this.TryPickupCurrentTileItem();
     }
 
     //对象角色的偏移
@@ -692,7 +719,7 @@ Role.prototype.IsExplosionHit = function(mapid) {
 Role.prototype.GetFootMapIDPair = function() {
     var mapPoint = this.MapPoint();
     // 脚点采样略低于中心但不压在格子分界线上，避免横向移动时误判到下一行
-    var footSampleYOffset = 16;
+    var footSampleYOffset = 8;
     var footSampleXOffset = 12;
     var leftFootMapID = GetMapIDByRelativePoint(mapPoint.X - footSampleXOffset, mapPoint.Y + footSampleYOffset);
     var rightFootMapID = GetMapIDByRelativePoint(mapPoint.X + footSampleXOffset, mapPoint.Y + footSampleYOffset);
@@ -1087,6 +1114,7 @@ Role.prototype.MoveTo = function(x, y) {
     
     if(paths.length > 0){
         if (paths.length <= 1) {
+            this.TryPickupCurrentTileItem();
             return true;
         }
         var t = this;
@@ -1144,6 +1172,7 @@ Role.prototype.MoveTo = function(x, y) {
                 }
             }
             else{
+                t.TryPickupCurrentTileItem();
                 clearInterval(t.movetoInterval);
             }
         }, 10);

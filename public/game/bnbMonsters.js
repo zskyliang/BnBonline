@@ -89,6 +89,10 @@ function IsAIWalkable(x, y) {
     return IsInsideMap(x, y) && (townBarrierMap[y][x] === 0 || townBarrierMap[y][x] > 100);
 }
 
+function IsNonRigidBarrierNo(no) {
+    return no === 3 || no === 8;
+}
+
 function ManhattanDist(x1, y1, x2, y2) {
     return Math.abs(x1 - x2) + Math.abs(y1 - y2);
 }
@@ -334,14 +338,103 @@ function CanRoleDropBombState(role) {
         && role.CanPaopaoLength > role.PaopaoCount;
 }
 
-function GetMonsterBombEscapeTarget(monster, currentMap, snapshot) {
+function CountSafeNeighborsWithThreatMap(x, y, threatMap) {
+    var i;
+    var count = 0;
+    var src = threatMap || {};
+    for (i = 0; i < DIRS.length; i++) {
+        var nx = x + DIRS[i].dx;
+        var ny = y + DIRS[i].dy;
+        var nk = MapKey(nx, ny);
+        if (!IsAIWalkable(nx, ny)) {
+            continue;
+        }
+        if (src[nk]) {
+            continue;
+        }
+        count++;
+    }
+    return count;
+}
+
+function BuildBombEscapePlan(fromX, fromY, bombX, bombY, strong, currentThreatMap) {
+    var simThreat = AddSimulatedBombThreat(currentThreatMap || {}, bombX, bombY, strong);
+    var queue = [{ x: fromX, y: fromY }];
+    var visited = {};
+    var distMap = {};
+    var prevMap = {};
+    var sk = MapKey(fromX, fromY);
+    var head = 0;
+    var bestKey = "";
+    var bestDist = Infinity;
+    var bestExitCount = -1;
+    var path = [];
+    var cursor;
+    var targetPos;
+    visited[sk] = true;
+    distMap[sk] = 0;
+    prevMap[sk] = null;
+
+    while (head < queue.length) {
+        var cur = queue[head++];
+        var ck = MapKey(cur.x, cur.y);
+        var curDist = distMap[ck];
+        var exits;
+        if (curDist > 0 && !simThreat[ck]) {
+            exits = CountSafeNeighborsWithThreatMap(cur.x, cur.y, simThreat);
+            if (exits >= 1 && (curDist < bestDist || (curDist === bestDist && exits > bestExitCount))) {
+                bestDist = curDist;
+                bestExitCount = exits;
+                bestKey = ck;
+            }
+        }
+        if (curDist >= 8) {
+            continue;
+        }
+        for (var i = 0; i < 4; i++) {
+            var nx = cur.x + DIRS[i].dx;
+            var ny = cur.y + DIRS[i].dy;
+            var nk = MapKey(nx, ny);
+            if (visited[nk] || !IsAIWalkable(nx, ny)) {
+                continue;
+            }
+            // 允许经过未来危险格，关键是要在爆炸结算前可达安全终点（由 bestKey 约束）
+            visited[nk] = true;
+            distMap[nk] = curDist + 1;
+            prevMap[nk] = ck;
+            queue.push({ x: nx, y: ny });
+        }
+    }
+
+    if (!bestKey) {
+        return null;
+    }
+    cursor = bestKey;
+    while (cursor) {
+        path.push(ParseKey(cursor));
+        cursor = prevMap[cursor];
+    }
+    path.reverse();
+    if (path.length <= 1) {
+        return null;
+    }
+    targetPos = path[path.length - 1];
+    return {
+        targetMap: { X: targetPos.X, Y: targetPos.Y },
+        firstStep: { X: path[1].X, Y: path[1].Y },
+        path: path,
+        safeNeighborCount: bestExitCount
+    };
+}
+
+function GetMonsterBombEscapePlan(monster, currentMap, snapshot) {
     var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
     var strong;
     if (!monster || !monster.Role || !currentMap) {
         return null;
     }
     strong = Math.max(1, parseInt(monster.Role.PaopaoStrong || 1, 10));
-    return FindEscapeRoute(
+    return BuildBombEscapePlan(
         currentMap.X,
         currentMap.Y,
         currentMap.X,
@@ -351,11 +444,26 @@ function GetMonsterBombEscapeTarget(monster, currentMap, snapshot) {
     );
 }
 
+function GetMonsterBombEscapeTarget(monster, currentMap, snapshot) {
+    var plan = GetMonsterBombEscapePlan(monster, currentMap, snapshot);
+    return plan ? plan.targetMap : null;
+}
+
 function CanMonsterDropBombSafely(monster, currentMap, snapshot) {
+    var plan;
     if (!monster || !currentMap || typeof monster.CanDropBomb !== "function" || !monster.CanDropBomb()) {
         return false;
     }
-    return !!GetMonsterBombEscapeTarget(monster, currentMap, snapshot);
+    plan = GetMonsterBombEscapePlan(monster, currentMap, snapshot);
+    return !!(plan && plan.firstStep && IsAIWalkable(plan.firstStep.X, plan.firstStep.Y));
+}
+
+function NormalizeStateVectorDim(value, fallback) {
+    var n = parseInt(value, 10);
+    if (isNaN(n) || n <= 0) {
+        return fallback;
+    }
+    return n;
 }
 
 function GetNearestEnemyInfo(selfRole, currentMap) {
@@ -627,6 +735,323 @@ var BNBMLFeatureEncoder = {
         return layer;
     },
 
+    CountWalkableNeighbors: function(x, y) {
+        var i;
+        var count = 0;
+        for (i = 0; i < DIRS.length; i++) {
+            var nx = x + DIRS[i].dx;
+            var ny = y + DIRS[i].dy;
+            if (IsAIWalkable(nx, ny)) {
+                count++;
+            }
+        }
+        return count;
+    },
+
+    BuildDistanceMap: function(startX, startY, maxDepth) {
+        var rows = typeof MapRowCount === "number" ? MapRowCount : 13;
+        var cols = typeof MapColumnCount === "number" ? MapColumnCount : 15;
+        var cap = typeof maxDepth === "number" ? Math.max(4, maxDepth) : 24;
+        var dist = {};
+        var queue = [];
+        var head = 0;
+        var key;
+        var i;
+        var nx;
+        var ny;
+        var nk;
+        if (!IsInsideMap(startX, startY) || !IsAIWalkable(startX, startY)) {
+            return dist;
+        }
+        queue.push({ x: startX, y: startY, d: 0 });
+        key = MapKey(startX, startY);
+        dist[key] = 0;
+        while (head < queue.length) {
+            var cur = queue[head++];
+            if (cur.d >= cap) {
+                continue;
+            }
+            for (i = 0; i < DIRS.length; i++) {
+                nx = cur.x + DIRS[i].dx;
+                ny = cur.y + DIRS[i].dy;
+                if (nx < 0 || nx >= cols || ny < 0 || ny >= rows) {
+                    continue;
+                }
+                if (!IsAIWalkable(nx, ny)) {
+                    continue;
+                }
+                nk = MapKey(nx, ny);
+                if (typeof dist[nk] === "number" && dist[nk] <= cur.d + 1) {
+                    continue;
+                }
+                dist[nk] = cur.d + 1;
+                queue.push({ x: nx, y: ny, d: cur.d + 1 });
+            }
+        }
+        return dist;
+    },
+
+    BuildHypotheticalBlastKeys: function(bombX, bombY, strong) {
+        var cid = bombY * 15 + bombX;
+        var bp = FindPaopaoBombXY(cid, Math.max(1, strong));
+        var all = bp.X.concat(bp.Y);
+        var keys = {};
+        var out = [];
+        var i;
+        var mapNo;
+        var x;
+        var y;
+        all.push(cid);
+        for (i = 0; i < all.length; i++) {
+            mapNo = all[i];
+            x = mapNo % 15;
+            y = parseInt(mapNo / 15, 10);
+            if (!IsInsideMap(x, y)) {
+                continue;
+            }
+            keys[MapKey(x, y)] = true;
+        }
+        for (var k in keys) {
+            if (keys.hasOwnProperty(k)) {
+                out.push(k);
+            }
+        }
+        return out;
+    },
+
+    CountSafeNeighborsInThreat: function(x, y, threatMap, snapshot, travelMs) {
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var soonMs = Math.max(220, (typeof travelMs === "number" ? travelMs : 0) + AIDodgePolicy.safeBufferMs);
+        var count = 0;
+        var i;
+        for (i = 0; i < DIRS.length; i++) {
+            var nx = x + DIRS[i].dx;
+            var ny = y + DIRS[i].dy;
+            var nk = MapKey(nx, ny);
+            var eta = src && src.dangerEtaMap ? src.dangerEtaMap[nk] : null;
+            if (!IsAIWalkable(nx, ny)) {
+                continue;
+            }
+            if (threatMap && threatMap[nk]) {
+                continue;
+            }
+            if (typeof eta === "number" && eta <= soonMs) {
+                continue;
+            }
+            count++;
+        }
+        return count;
+    },
+
+    EstimatePostBombEscapeMetrics: function(currentMap, bombStrong, snapshot) {
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var simulatedThreat = AddSimulatedBombThreat(
+            src && src.threatMap ? src.threatMap : {},
+            currentMap.X,
+            currentMap.Y,
+            Math.max(1, bombStrong)
+        );
+        var queue = [{ x: currentMap.X, y: currentMap.Y, d: 0 }];
+        var visited = {};
+        var head = 0;
+        var maxDepth = 6;
+        var bestSteps = null;
+        var out = {
+            steps_norm: 1.0,
+            min_escape_eta_after_bomb: 0.0
+        };
+        visited[MapKey(currentMap.X, currentMap.Y)] = true;
+        while (head < queue.length) {
+            var cur = queue[head++];
+            var key = MapKey(cur.x, cur.y);
+            var eta = src && src.dangerEtaMap ? src.dangerEtaMap[key] : null;
+            var exits = this.CountSafeNeighborsInThreat(cur.x, cur.y, simulatedThreat, src, cur.d * 240);
+            var soon = typeof eta === "number" && eta <= (cur.d * 240 + AIDodgePolicy.safeBufferMs);
+            if (!simulatedThreat[key] && !soon && exits >= 2) {
+                bestSteps = cur.d;
+                break;
+            }
+            if (cur.d >= maxDepth) {
+                continue;
+            }
+            for (var i = 0; i < DIRS.length; i++) {
+                var nx = cur.x + DIRS[i].dx;
+                var ny = cur.y + DIRS[i].dy;
+                var nk = MapKey(nx, ny);
+                if (visited[nk] || !IsAIWalkable(nx, ny)) {
+                    continue;
+                }
+                visited[nk] = true;
+                queue.push({ x: nx, y: ny, d: cur.d + 1 });
+            }
+        }
+        if (typeof bestSteps === "number") {
+            out.steps_norm = ClampNumber(bestSteps / maxDepth, 0, 1);
+            out.min_escape_eta_after_bomb = ClampNumber((maxDepth - bestSteps) / maxDepth, 0, 1);
+        }
+        return out;
+    },
+
+    ComputeCorridorDeadendDepth: function(currentMap, maxDepth) {
+        var cap = typeof maxDepth === "number" ? Math.max(4, maxDepth) : 8;
+        var queue = [{ x: currentMap.X, y: currentMap.Y, d: 0 }];
+        var head = 0;
+        var visited = {};
+        var best = 0;
+        var startDegree = this.CountWalkableNeighbors(currentMap.X, currentMap.Y);
+        if (startDegree >= 3) {
+            return 0;
+        }
+        visited[MapKey(currentMap.X, currentMap.Y)] = true;
+        while (head < queue.length) {
+            var cur = queue[head++];
+            if (cur.d > best) {
+                best = cur.d;
+            }
+            if (cur.d >= cap) {
+                continue;
+            }
+            for (var i = 0; i < DIRS.length; i++) {
+                var nx = cur.x + DIRS[i].dx;
+                var ny = cur.y + DIRS[i].dy;
+                var nk = MapKey(nx, ny);
+                var deg;
+                if (!IsAIWalkable(nx, ny) || visited[nk]) {
+                    continue;
+                }
+                deg = this.CountWalkableNeighbors(nx, ny);
+                if (deg >= 3) {
+                    continue;
+                }
+                visited[nk] = true;
+                queue.push({ x: nx, y: ny, d: cur.d + 1 });
+            }
+        }
+        return ClampNumber(best / cap, 0, 1);
+    },
+
+    ComputeBlastOverlapNext2s: function(currentMap, bombStrong, snapshot) {
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var blastKeys = this.BuildHypotheticalBlastKeys(currentMap.X, currentMap.Y, Math.max(1, bombStrong));
+        var overlap = 0;
+        var i;
+        var key;
+        var eta;
+        if (!blastKeys || blastKeys.length === 0) {
+            return 0;
+        }
+        for (i = 0; i < blastKeys.length; i++) {
+            key = blastKeys[i];
+            eta = src && src.dangerEtaMap ? src.dangerEtaMap[key] : null;
+            if ((src && src.threatMap && src.threatMap[key]) || (typeof eta === "number" && eta <= 2000)) {
+                overlap++;
+            }
+        }
+        return ClampNumber(overlap / blastKeys.length, 0, 1);
+    },
+
+    ComputeEnemyEscapeOptionsAfterMyBomb: function(currentMap, enemyMap, bombStrong, snapshot) {
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var simulatedThreat = AddSimulatedBombThreat(
+            src && src.threatMap ? src.threatMap : {},
+            currentMap.X,
+            currentMap.Y,
+            Math.max(1, bombStrong)
+        );
+        var candidates = [
+            { x: enemyMap.X, y: enemyMap.Y },
+            { x: enemyMap.X + 1, y: enemyMap.Y },
+            { x: enemyMap.X - 1, y: enemyMap.Y },
+            { x: enemyMap.X, y: enemyMap.Y + 1 },
+            { x: enemyMap.X, y: enemyMap.Y - 1 }
+        ];
+        var seen = {};
+        var safeCount = 0;
+        var i;
+        for (i = 0; i < candidates.length; i++) {
+            var c = candidates[i];
+            var key;
+            var eta;
+            if (!IsAIWalkable(c.x, c.y)) {
+                continue;
+            }
+            key = MapKey(c.x, c.y);
+            if (seen[key]) {
+                continue;
+            }
+            seen[key] = true;
+            eta = src && src.dangerEtaMap ? src.dangerEtaMap[key] : null;
+            if (simulatedThreat[key]) {
+                continue;
+            }
+            if (typeof eta === "number" && eta <= 360) {
+                continue;
+            }
+            if (this.CountSafeNeighborsInThreat(c.x, c.y, simulatedThreat, src, 220) <= 0) {
+                continue;
+            }
+            safeCount++;
+        }
+        return ClampNumber(safeCount / 5, 0, 1);
+    },
+
+    ComputeTrapClosureScore: function(enemyEscapeOptions, enemyDist, mapDiameterNorm) {
+        var closure = 1 - ClampNumber(enemyEscapeOptions, 0, 1);
+        var proximity = 1 - ClampNumber(enemyDist / Math.max(1, mapDiameterNorm), 0, 1);
+        return ClampNumber(closure * 0.7 + proximity * 0.3, 0, 1);
+    },
+
+    ComputeItemRaceDelta: function(currentMap, enemyMap) {
+        var selfDistMap = this.BuildDistanceMap(currentMap.X, currentMap.Y, 24);
+        var enemyDistMap = this.BuildDistanceMap(enemyMap.X, enemyMap.Y, 24);
+        var rows = typeof MapRowCount === "number" ? MapRowCount : 13;
+        var cols = typeof MapColumnCount === "number" ? MapColumnCount : 15;
+        var y;
+        var x;
+        var key;
+        var ds;
+        var de;
+        var bestDelta = null;
+        for (y = 0; y < rows; y++) {
+            for (x = 0; x < cols; x++) {
+                if (!townBarrierMap[y] || Number(townBarrierMap[y][x]) <= 100) {
+                    continue;
+                }
+                key = MapKey(x, y);
+                ds = typeof selfDistMap[key] === "number" ? selfDistMap[key] : 999;
+                de = typeof enemyDistMap[key] === "number" ? enemyDistMap[key] : 999;
+                if (ds >= 999 && de >= 999) {
+                    continue;
+                }
+                if (ds >= 999) {
+                    bestDelta = Math.max(bestDelta == null ? -1 : bestDelta, -1);
+                } else if (de >= 999) {
+                    bestDelta = Math.max(bestDelta == null ? 1 : bestDelta, 1);
+                } else {
+                    var d = ClampNumber((de - ds) / 10, -1, 1);
+                    bestDelta = Math.max(bestDelta == null ? d : bestDelta, d);
+                }
+            }
+        }
+        if (bestDelta == null) {
+            return 0.5;
+        }
+        return ClampNumber((bestDelta + 1) * 0.5, 0, 1);
+    },
+
+    ComputeEnemyPowerGap: function(selfRole, enemyRole) {
+        var selfScore;
+        var enemyScore;
+        var rawGap;
+        if (!selfRole || !enemyRole) {
+            return 0.5;
+        }
+        selfScore = Number(selfRole.CanPaopaoLength || 0) + Number(selfRole.PaopaoStrong || 0) + Number(selfRole.MoveStep || 0) * 0.65;
+        enemyScore = Number(enemyRole.CanPaopaoLength || 0) + Number(enemyRole.PaopaoStrong || 0) + Number(enemyRole.MoveStep || 0) * 0.65;
+        rawGap = (enemyScore - selfScore) / Math.max(1, selfScore + enemyScore + 2);
+        return ClampNumber((rawGap + 1) * 0.5, 0, 1);
+    },
+
     Encode: function(role, currentMap, snapshot) {
         var rows = typeof MapRowCount === "number" ? MapRowCount : 13;
         var cols = typeof MapColumnCount === "number" ? MapColumnCount : 15;
@@ -669,6 +1094,25 @@ var BNBMLFeatureEncoder = {
         var enemyDistanceNorm = 1;
         var enemyCanDropBomb = 0;
         var enemyThreatDensity = 0;
+        var postBombEscapeStepsNorm = 1;
+        var minEscapeEtaAfterBomb = 0;
+        var corridorDeadendDepth = 0;
+        var blastOverlapNext2s = 0;
+        var enemyEscapeOptionsAfterMyBomb = 0.5;
+        var trapClosureScore = 0;
+        var itemRaceDelta = 0.5;
+        var enemyPowerGap = 0.5;
+        var selfTotalBubbleCapNorm = 0;
+        var selfActiveBubbleCountNorm = 0;
+        var enemyTotalBubbleCapNorm = 0;
+        var enemyActiveBubbleCountNorm = 0;
+        var enemyPowerNorm = 0;
+        var enemySpeedNorm = 0;
+        var enemyShortestPathDistNorm = 1;
+        var spawnShortestPathDistNorm = 1;
+        var distMap = null;
+        var nearestPathDist = 999;
+        var episodeMeta = null;
         var footKey;
         var enemies;
         var enemy;
@@ -776,11 +1220,55 @@ var BNBMLFeatureEncoder = {
             );
             selfBombPowerNorm = ClampNumber((role.PaopaoStrong || 1) / Math.max(1, maxStrong), 0, 1);
             selfSpeedNorm = ClampNumber((role.MoveStep || 0) / Math.max(1, maxMoveStep), 0, 1);
+            selfTotalBubbleCapNorm = ClampNumber((role.CanPaopaoLength || 0) / Math.max(1, MonsterMaxPaopaoLength || role.CanPaopaoLength || 1), 0, 1);
+            selfActiveBubbleCountNorm = ClampNumber((role.PaopaoCount || 0) / Math.max(1, MonsterMaxPaopaoLength || role.CanPaopaoLength || 1), 0, 1);
+            episodeMeta = (typeof window !== "undefined" && window.__combatCollect && window.__combatCollect.currentEpisodeMeta)
+                ? window.__combatCollect.currentEpisodeMeta
+                : ((typeof window !== "undefined" && window.__combatEvalEnv && window.__combatEvalEnv.currentEpisodeMeta)
+                    ? window.__combatEvalEnv.currentEpisodeMeta
+                    : null);
             if (nearestEnemy) {
                 enemyDistanceNorm = ClampNumber(nearestEnemy.dist / mapDiameterNorm, 0, 1);
                 enemyCanDropBomb = CanRoleDropBombState(nearestEnemy.role) ? 1 : 0;
+                enemyTotalBubbleCapNorm = ClampNumber((nearestEnemy.role.CanPaopaoLength || 0) / Math.max(1, MonsterMaxPaopaoLength || nearestEnemy.role.CanPaopaoLength || 1), 0, 1);
+                enemyActiveBubbleCountNorm = ClampNumber((nearestEnemy.role.PaopaoCount || 0) / Math.max(1, MonsterMaxPaopaoLength || nearestEnemy.role.CanPaopaoLength || 1), 0, 1);
+                enemyPowerNorm = ClampNumber((nearestEnemy.role.PaopaoStrong || 1) / Math.max(1, maxStrong), 0, 1);
+                enemySpeedNorm = ClampNumber((nearestEnemy.role.MoveStep || 0) / Math.max(1, maxMoveStep), 0, 1);
+                if (typeof this.BuildDistanceMap === "function") {
+                    distMap = this.BuildDistanceMap(currentMap.X, currentMap.Y, 24);
+                    nearestPathDist = distMap && nearestEnemy.map
+                        ? Number(distMap[MapKey(nearestEnemy.map.X, nearestEnemy.map.Y)])
+                        : 999;
+                    if (!(nearestPathDist >= 999)) {
+                        enemyShortestPathDistNorm = ClampNumber(nearestPathDist / mapDiameterNorm, 0, 1);
+                    }
+                }
+                enemyEscapeOptionsAfterMyBomb = this.ComputeEnemyEscapeOptionsAfterMyBomb(
+                    currentMap,
+                    nearestEnemy.map,
+                    Math.max(1, parseInt(role.PaopaoStrong || 1, 10)),
+                    src
+                );
+                trapClosureScore = this.ComputeTrapClosureScore(enemyEscapeOptionsAfterMyBomb, nearestEnemy.dist, mapDiameterNorm);
+                itemRaceDelta = this.ComputeItemRaceDelta(currentMap, nearestEnemy.map);
+                enemyPowerGap = this.ComputeEnemyPowerGap(role, nearestEnemy.role);
             }
             enemyThreatDensity = ClampNumber(enemyProximitySum / 2, 0, 1);
+            if (!nearestEnemy) {
+                trapClosureScore = 0;
+                itemRaceDelta = 0.5;
+                enemyPowerGap = 0.5;
+            }
+            if (episodeMeta && typeof episodeMeta.spawnShortestPathDist === "number") {
+                spawnShortestPathDistNorm = ClampNumber(episodeMeta.spawnShortestPathDist / mapDiameterNorm, 0, 1);
+            } else {
+                spawnShortestPathDistNorm = enemyShortestPathDistNorm;
+            }
+            var postBomb = this.EstimatePostBombEscapeMetrics(currentMap, Math.max(1, parseInt(role.PaopaoStrong || 1, 10)), src);
+            postBombEscapeStepsNorm = postBomb.steps_norm;
+            minEscapeEtaAfterBomb = postBomb.min_escape_eta_after_bomb;
+            corridorDeadendDepth = this.ComputeCorridorDeadendDepth(currentMap, 8);
+            blastOverlapNext2s = this.ComputeBlastOverlapNext2s(currentMap, Math.max(1, parseInt(role.PaopaoStrong || 1, 10)), src);
         }
 
         return {
@@ -801,7 +1289,23 @@ var BNBMLFeatureEncoder = {
                 selfSpeedNorm,
                 enemyDistanceNorm,
                 enemyCanDropBomb,
-                enemyThreatDensity
+                enemyThreatDensity,
+                postBombEscapeStepsNorm,
+                minEscapeEtaAfterBomb,
+                corridorDeadendDepth,
+                blastOverlapNext2s,
+                enemyEscapeOptionsAfterMyBomb,
+                trapClosureScore,
+                itemRaceDelta,
+                enemyPowerGap,
+                selfTotalBubbleCapNorm,
+                selfActiveBubbleCountNorm,
+                enemyTotalBubbleCapNorm,
+                enemyActiveBubbleCountNorm,
+                enemyPowerNorm,
+                enemySpeedNorm,
+                enemyShortestPathDistNorm,
+                spawnShortestPathDistNorm
             ]
         };
     },
@@ -869,6 +1373,19 @@ var BNBMLDatasetCollector = {
     BuildSampleMeta: function(monster, currentMap, snapshot, choice) {
         var key = MapKey(currentMap.X, currentMap.Y);
         var eta = snapshot && snapshot.dangerEtaMap ? snapshot.dangerEtaMap[key] : null;
+        var role = monster && monster.Role ? monster.Role : null;
+        var nearestEnemy = role ? GetNearestEnemyInfo(role, currentMap) : null;
+        var maxStrong = (typeof RoleConstant !== "undefined" && RoleConstant && RoleConstant.MaxPaopaoStrong)
+            ? RoleConstant.MaxPaopaoStrong
+            : 8;
+        var maxMoveStep = (typeof RoleConstant !== "undefined" && RoleConstant && RoleConstant.MaxMoveStep)
+            ? RoleConstant.MaxMoveStep
+            : 10;
+        var spawnMeta = (typeof window !== "undefined" && window.__combatCollect && window.__combatCollect.currentEpisodeMeta)
+            ? window.__combatCollect.currentEpisodeMeta
+            : ((typeof window !== "undefined" && window.__combatEvalEnv && window.__combatEvalEnv.currentEpisodeMeta)
+                ? window.__combatEvalEnv.currentEpisodeMeta
+                : null);
         return {
             roleNumber: monster && monster.Role ? monster.Role.RoleNumber : -1,
             x: currentMap.X,
@@ -876,7 +1393,19 @@ var BNBMLDatasetCollector = {
             eta: typeof eta === "number" ? eta : null,
             activeBombs: CountActiveBombs(),
             safeNeighbors: CountSafeNeighborTiles(currentMap.X, currentMap.Y, snapshot),
-            nextSafeRank: choice ? choice.safeRank : null
+            nextSafeRank: choice ? choice.safeRank : null,
+            selfTotalBubbleCap: role ? Number(role.CanPaopaoLength || 0) : 0,
+            selfActiveBubbleCount: role ? Number(role.PaopaoCount || 0) : 0,
+            selfPower: role ? ClampNumber((role.PaopaoStrong || 1) / Math.max(1, maxStrong), 0, 1) : 0,
+            selfSpeed: role ? ClampNumber((role.MoveStep || 0) / Math.max(1, maxMoveStep), 0, 1) : 0,
+            enemyTotalBubbleCap: nearestEnemy && nearestEnemy.role ? Number(nearestEnemy.role.CanPaopaoLength || 0) : 0,
+            enemyActiveBubbleCount: nearestEnemy && nearestEnemy.role ? Number(nearestEnemy.role.PaopaoCount || 0) : 0,
+            enemyPower: nearestEnemy && nearestEnemy.role ? ClampNumber((nearestEnemy.role.PaopaoStrong || 1) / Math.max(1, maxStrong), 0, 1) : 0,
+            enemySpeed: nearestEnemy && nearestEnemy.role ? ClampNumber((nearestEnemy.role.MoveStep || 0) / Math.max(1, maxMoveStep), 0, 1) : 0,
+            enemyShortestPathDist: nearestEnemy ? Number(nearestEnemy.dist || 0) : null,
+            spawnShortestPathDist: spawnMeta && typeof spawnMeta.spawnShortestPathDist === "number"
+                ? spawnMeta.spawnShortestPathDist
+                : null
         };
     },
 
@@ -1016,6 +1545,8 @@ var BNBMLDatasetCollector = {
         var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
         var nearestEnemy;
         var attackReach;
+        var collectScenario;
+        var collectBombBias;
         var di;
         var bx;
         var by;
@@ -1030,6 +1561,24 @@ var BNBMLDatasetCollector = {
             return null;
         }
         attackReach = Math.max(1, parseInt(monster.Role.PaopaoStrong || 1, 10));
+        collectScenario = (typeof window !== "undefined"
+            && window.__combatCollect
+            && window.__combatCollect.balanced)
+            ? String(window.__combatCollect.currentScenario || "")
+            : "";
+        collectBombBias = collectScenario === "escape_after_bomb"
+            || collectScenario === "enemy_choke"
+            || collectScenario === "deadend_chase"
+            || collectScenario === "item_race";
+        if (collectBombBias
+            && nearestEnemy.dist <= Math.max(3, attackReach + 1)
+            && Math.random() < (
+                collectScenario === "escape_after_bomb"
+                    ? 0.84
+                    : (collectScenario === "enemy_choke" || collectScenario === "deadend_chase" ? 0.66 : 0.42)
+            )) {
+            return BNBMLActionSpace.DROP_BOMB;
+        }
         if (nearestEnemy.dist > attackReach) {
             return null;
         }
@@ -1046,17 +1595,96 @@ var BNBMLDatasetCollector = {
         if (nearestEnemy.dist <= 1) {
             return BNBMLActionSpace.DROP_BOMB;
         }
-        if (nearestEnemy.dist <= Math.max(3, attackReach + 1) && Math.random() < 0.28) {
+        if (nearestEnemy.dist <= Math.max(3, attackReach + 1) && Math.random() < 0.38) {
             return BNBMLActionSpace.DROP_BOMB;
         }
         for (di = 0; di < DIRS.length; di++) {
             bx = currentMap.X + DIRS[di].dx;
             by = currentMap.Y + DIRS[di].dy;
-            if (IsInsideMap(bx, by) && townBarrierMap[by][bx] === 3 && Math.random() < 0.22) {
+            if (IsInsideMap(bx, by) && IsNonRigidBarrierNo(townBarrierMap[by][bx]) && Math.random() < 0.34) {
                 return BNBMLActionSpace.DROP_BOMB;
             }
         }
         return null;
+    },
+
+    InferExpertDuelAction: function(monster, currentMap, snapshot, mode) {
+        var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+        var nearestEnemy;
+        var enemyMap;
+        var attackReach;
+        var bombProb;
+        var bombRange;
+        var dirs;
+        var i;
+        var d;
+        var nx;
+        var ny;
+        var key;
+        var isThreat;
+        var eta;
+        var safeN;
+        var distToEnemy;
+        var score;
+        var bestAction = 0;
+        var bestScore = -1e9;
+        var expertMode = String(mode || "heuristic_v2");
+
+        if (!monster || !monster.Role || !currentMap) {
+            return null;
+        }
+        nearestEnemy = GetNearestEnemyInfo(monster.Role, currentMap);
+        if (!nearestEnemy || !nearestEnemy.map) {
+            return null;
+        }
+        enemyMap = nearestEnemy.map;
+        attackReach = Math.max(1, parseInt(monster.Role.PaopaoStrong || 1, 10));
+        bombProb = expertMode === "aggressive_trapper" ? 0.46 : 0.28;
+        bombRange = expertMode === "aggressive_trapper" ? Math.max(4, attackReach + 1) : Math.max(2, attackReach);
+
+        if (nearestEnemy.dist <= bombRange
+            && CanMonsterDropBombSafely(monster, currentMap, src)
+            && Math.random() < bombProb) {
+            return BNBMLActionSpace.DROP_BOMB;
+        }
+
+        dirs = [
+            { action: 1, dx: 0, dy: -1 },
+            { action: 2, dx: 0, dy: 1 },
+            { action: 3, dx: -1, dy: 0 },
+            { action: 4, dx: 1, dy: 0 }
+        ];
+        for (i = 0; i < dirs.length; i++) {
+            d = dirs[i];
+            nx = currentMap.X + d.dx;
+            ny = currentMap.Y + d.dy;
+            if (!IsAIWalkable(nx, ny)) {
+                continue;
+            }
+            key = MapKey(nx, ny);
+            isThreat = !!(src && src.threatMap && src.threatMap[key]);
+            eta = src && src.dangerEtaMap && typeof src.dangerEtaMap[key] === "number"
+                ? src.dangerEtaMap[key]
+                : null;
+            safeN = CountSafeNeighborTiles(nx, ny, src);
+            distToEnemy = Math.abs(enemyMap.X - nx) + Math.abs(enemyMap.Y - ny);
+            score = 0;
+            score += safeN * 10;
+            score += isThreat ? -950 : 28;
+            score += typeof eta === "number" ? Math.min(eta, 1200) / 110 : 6;
+            if (expertMode === "aggressive_trapper") {
+                score += Math.max(0, 7 - distToEnemy) * 13.0;
+            } else {
+                score += Math.max(0, 6 - distToEnemy) * 8.0;
+                score += Math.max(0, distToEnemy - 1) * 1.2;
+            }
+            score += (Math.random() - 0.5) * 2.0;
+            if (score > bestScore) {
+                bestScore = score;
+                bestAction = d.action;
+            }
+        }
+        return bestAction;
     },
 
     ChooseMixedPolicyAction: function(monster, currentMap, snapshot, expertAction) {
@@ -1392,14 +2020,37 @@ var BNBMLDatasetCollector = {
         var combatAction;
         var temporalAction;
         var mix;
+        var expertDuelAction;
+        var agentExpertMode;
         if (!this.ShouldCollect()) {
             return null;
+        }
+        if (typeof window !== "undefined"
+            && window.__combatCollect
+            && window.__combatCollect.agentExpertDuel) {
+            agentExpertMode = String(window.__combatCollect.currentAgentExpert || "heuristic_v2");
+            expertDuelAction = this.InferExpertDuelAction(monster, currentMap, snapshot, agentExpertMode);
+            if (typeof expertDuelAction === "number") {
+                return {
+                    action: NormalizeActionId(expertDuelAction),
+                    policy_tag: "agent_" + agentExpertMode
+                };
+            }
         }
         choice = PickNextFrameMovementChoice(monster.Role, currentMap, snapshot);
         action = EncodeActionFromChoice(choice, currentMap);
         combatAction = this.InferCombatAction(monster, currentMap, snapshot);
         if (typeof combatAction === "number") {
             action = combatAction;
+            if (action === BNBMLActionSpace.DROP_BOMB
+                && typeof window !== "undefined"
+                && window.__combatCollect
+                && window.__combatCollect.balanced) {
+                return {
+                    action: action,
+                    policy_tag: "expert_collect_bomb"
+                };
+            }
         }
         temporalAction = this.InferTemporalPlanAction(monster, currentMap);
         if (typeof temporalAction === "number" && temporalAction >= 0 && temporalAction <= 4 && action === 0) {
@@ -1517,6 +2168,14 @@ var BNBMLRuntime = {
         fallbackCount: 0,
         avgLatencyMs: 0,
         modelActionDim: BNBMLActionSpace.MAX_DIM,
+        modelVectorDim: 24,
+        modelSequenceLen: 1,
+        modelInputMode: "single",
+        forcedMapRank: 0,
+        forcedVecRank: 0,
+        sequencePathHits: 0,
+        singlePathHits: 0,
+        sequenceBuffers: {},
         actionHist: BuildBNBMLActionHistTemplate(BNBMLActionSpace.MAX_DIM),
         spawnedBubblesEffective: 0,
         spawnedBubblesIgnoredTrapped: 0,
@@ -1539,6 +2198,14 @@ var BNBMLRuntime = {
         this.State.fallbackCount = 0;
         this.State.avgLatencyMs = 0;
         this.State.modelActionDim = BNBMLActionSpace.MAX_DIM;
+        this.State.modelVectorDim = 24;
+        this.State.modelSequenceLen = 1;
+        this.State.modelInputMode = "single";
+        this.State.forcedMapRank = 0;
+        this.State.forcedVecRank = 0;
+        this.State.sequencePathHits = 0;
+        this.State.singlePathHits = 0;
+        this.State.sequenceBuffers = {};
         this.State.actionHist = BuildBNBMLActionHistTemplate(BNBMLActionSpace.MAX_DIM);
         this.State.latestPrediction = null;
         this.State.spawnedBubblesEffective = 0;
@@ -1812,24 +2479,256 @@ var BNBMLRuntime = {
         return true;
     },
 
+    ResolveSessionInputDim: function(session, inputName, fallback) {
+        var meta;
+        var info;
+        var dims;
+        var i;
+        if (!session || !inputName) {
+            return NormalizeStateVectorDim(fallback, 24);
+        }
+        meta = session.inputMetadata || null;
+        if (!meta) {
+            return NormalizeStateVectorDim(fallback, 24);
+        }
+        if (typeof meta.get === "function") {
+            info = meta.get(inputName);
+        } else {
+            info = meta[inputName];
+        }
+        if (!info) {
+            return NormalizeStateVectorDim(fallback, 24);
+        }
+        dims = info.dimensions || info.dims || info.shape || null;
+        if (dims && !Array.isArray(dims) && typeof dims.length === "number") {
+            dims = Array.prototype.slice.call(dims);
+        }
+        if (!Array.isArray(dims)) {
+            return NormalizeStateVectorDim(fallback, 24);
+        }
+        for (i = dims.length - 1; i >= 0; i--) {
+            var dim = parseInt(dims[i], 10);
+            if (!isNaN(dim) && dim > 0) {
+                return dim;
+            }
+        }
+        return NormalizeStateVectorDim(fallback, 24);
+    },
+
+    ResolveSessionInputRank: function(session, inputName, fallback) {
+        var meta;
+        var info;
+        var dims;
+        if (!session || !inputName) {
+            return typeof fallback === "number" ? fallback : 2;
+        }
+        meta = session.inputMetadata || null;
+        if (!meta) {
+            return typeof fallback === "number" ? fallback : 2;
+        }
+        if (typeof meta.get === "function") {
+            info = meta.get(inputName);
+        } else {
+            info = meta[inputName];
+        }
+        if (!info) {
+            return typeof fallback === "number" ? fallback : 2;
+        }
+        dims = info.dimensions || info.dims || info.shape || null;
+        if (dims && !Array.isArray(dims) && typeof dims.length === "number") {
+            dims = Array.prototype.slice.call(dims);
+        }
+        if (!Array.isArray(dims)) {
+            return typeof fallback === "number" ? fallback : 2;
+        }
+        return dims.length;
+    },
+
+    ResolveSessionSequenceLen: function(session, inputName, fallback) {
+        var meta;
+        var info;
+        var dims;
+        var dim;
+        if (!session || !inputName) {
+            return Math.max(1, parseInt(fallback, 10) || 1);
+        }
+        meta = session.inputMetadata || null;
+        if (!meta) {
+            return Math.max(1, parseInt(fallback, 10) || 1);
+        }
+        if (typeof meta.get === "function") {
+            info = meta.get(inputName);
+        } else {
+            info = meta[inputName];
+        }
+        if (!info) {
+            return Math.max(1, parseInt(fallback, 10) || 1);
+        }
+        dims = info.dimensions || info.dims || info.shape || null;
+        if (dims && !Array.isArray(dims) && typeof dims.length === "number") {
+            dims = Array.prototype.slice.call(dims);
+        }
+        if (!Array.isArray(dims) || dims.length < 2) {
+            return Math.max(1, parseInt(fallback, 10) || 1);
+        }
+        dim = parseInt(dims[1], 10);
+        if (!isNaN(dim) && dim > 0) {
+            return dim;
+        }
+        return Math.max(1, parseInt(fallback, 10) || 1);
+    },
+
+    BuildSequenceKey: function(role) {
+        if (!role || typeof role.RoleNumber !== "number") {
+            return "role_unknown";
+        }
+        return "role_" + role.RoleNumber;
+    },
+
+    PushSequenceFrame: function(roleKey, encoded) {
+        var buffers = this.State.sequenceBuffers || {};
+        var list;
+        var keep;
+        if (!roleKey || !encoded || !encoded.state_map || !encoded.state_vector) {
+            return;
+        }
+        list = buffers[roleKey] || [];
+        list.push({
+            state_map: encoded.state_map,
+            state_vector: encoded.state_vector,
+            ts: Date.now()
+        });
+        keep = Math.max(16, Math.max(1, this.State.modelSequenceLen || 1) * 6);
+        if (list.length > keep) {
+            list = list.slice(list.length - keep);
+        }
+        buffers[roleKey] = list;
+        this.State.sequenceBuffers = buffers;
+    },
+
+    BuildSequenceInput: function(roleKey, sequenceLen, vectorDim) {
+        var buffers = this.State.sequenceBuffers || {};
+        var list = buffers[roleKey] || [];
+        var seqLen = Math.max(1, parseInt(sequenceLen, 10) || 1);
+        var vecDim = NormalizeStateVectorDim(vectorDim, 24);
+        var frames;
+        var i;
+        var base;
+        var rowCount;
+        var colCount;
+        var channelCount;
+        var frameSize;
+        var mapTensor;
+        var vecTensor;
+        var mapOffset = 0;
+        var nchw;
+        var vec;
+        if (!list.length) {
+            return null;
+        }
+        if (list.length >= seqLen) {
+            frames = list.slice(list.length - seqLen);
+        } else {
+            frames = [];
+            base = list[0];
+            for (i = 0; i < seqLen - list.length; i++) {
+                frames.push(base);
+            }
+            frames = frames.concat(list);
+        }
+        if (!frames.length || !frames[0].state_map || !frames[0].state_map[0] || !frames[0].state_map[0][0]) {
+            return null;
+        }
+        rowCount = frames[0].state_map.length;
+        colCount = frames[0].state_map[0].length;
+        channelCount = frames[0].state_map[0][0].length;
+        frameSize = channelCount * rowCount * colCount;
+        mapTensor = new Float32Array(seqLen * frameSize);
+        vecTensor = new Float32Array(seqLen * vecDim);
+
+        for (i = 0; i < frames.length; i++) {
+            nchw = BNBMLFeatureEncoder.ToNCHWFloat32(frames[i].state_map);
+            mapTensor.set(nchw, mapOffset);
+            mapOffset += frameSize;
+            vec = this.FitStateVectorForModel(frames[i].state_vector, vecDim);
+            vecTensor.set(vec, i * vecDim);
+        }
+
+        return {
+            mapTensor: mapTensor,
+            mapShape: [1, seqLen, channelCount, rowCount, colCount],
+            vectorTensor: vecTensor,
+            vectorShape: [1, seqLen, vecDim]
+        };
+    },
+
+    FitStateVectorForModel: function(vector, expectedDim) {
+        var src = Array.isArray(vector) ? vector : [];
+        var targetDim = NormalizeStateVectorDim(expectedDim, src.length > 0 ? src.length : 24);
+        var out = new Float32Array(targetDim);
+        var i;
+        for (i = 0; i < targetDim && i < src.length; i++) {
+            out[i] = Number(src[i]) || 0;
+        }
+        return out;
+    },
+
+    UpdateRankHintsFromError: function(errMsg, mapName, vecName) {
+        var msg = String(errMsg || "");
+        var match = /Invalid rank for input:\s*([^\s]+)\s*Got:\s*(\d+)\s*Expected:\s*(\d+)/i.exec(msg);
+        var inputName;
+        var expected;
+        var inputLower;
+        if (!match) {
+            return false;
+        }
+        inputName = String(match[1] || "");
+        expected = parseInt(match[3], 10);
+        if (isNaN(expected) || expected <= 0) {
+            return false;
+        }
+        inputLower = inputName.toLowerCase();
+        if (inputName === mapName || inputLower.indexOf("map") !== -1) {
+            this.State.forcedMapRank = Math.max(0, expected);
+        } else if (inputName === vecName || inputLower.indexOf("vector") !== -1) {
+            this.State.forcedVecRank = Math.max(0, expected);
+        }
+        if ((this.State.forcedMapRank || 0) >= 5 || (this.State.forcedVecRank || 0) >= 3) {
+            this.State.modelInputMode = "sequence";
+            if (!(this.State.modelSequenceLen > 1)) {
+                this.State.modelSequenceLen = 8;
+            }
+        }
+        return true;
+    },
+
     SchedulePrediction: function(role, currentMap, snapshot) {
         var self = this;
         var startedAt = Date.now();
         var encoded;
         var mapTensor;
+        var mapShape;
         var vectorTensor;
+        var vectorShape;
         var session = this.State.session;
         var inputNames;
         var outputNames;
         var mapName;
         var vecName;
+        var vecDim;
+        var mapRank;
+        var vecRank;
+        var useSequence;
+        var seqLen;
+        var seqFallback;
+        var roleKey;
+        var seqPayload;
+        var chosenInputMode;
 
         if (!session || this.State.inflight || !role || !currentMap) {
             return;
         }
         encoded = BNBMLFeatureEncoder.Encode(role, currentMap, snapshot);
-        mapTensor = BNBMLFeatureEncoder.ToNCHWFloat32(encoded.state_map);
-        vectorTensor = new Float32Array(encoded.state_vector);
         inputNames = session.inputNames || [];
         outputNames = session.outputNames || [];
         mapName = inputNames.length > 0 ? inputNames[0] : "state_map";
@@ -1840,15 +2739,52 @@ var BNBMLRuntime = {
             mapName = inputNames[1];
             vecName = inputNames[0];
         }
+        vecDim = this.ResolveSessionInputDim(session, vecName, encoded.state_vector.length);
+        mapRank = Math.max(this.State.forcedMapRank || 0, this.ResolveSessionInputRank(session, mapName, 4));
+        vecRank = Math.max(this.State.forcedVecRank || 0, this.ResolveSessionInputRank(session, vecName, 2));
+        useSequence = mapRank >= 5 || vecRank >= 3;
+        this.State.modelVectorDim = vecDim;
+
+        if (useSequence) {
+            seqFallback = this.State.modelSequenceLen && this.State.modelSequenceLen > 1 ? this.State.modelSequenceLen : 8;
+            seqLen = this.ResolveSessionSequenceLen(session, mapName, seqFallback);
+            this.State.modelSequenceLen = seqLen;
+            this.State.modelInputMode = "sequence";
+            roleKey = this.BuildSequenceKey(role);
+            this.PushSequenceFrame(roleKey, encoded);
+            seqPayload = this.BuildSequenceInput(roleKey, seqLen, vecDim);
+            if (seqPayload && seqPayload.mapTensor && seqPayload.vectorTensor) {
+                mapTensor = seqPayload.mapTensor;
+                mapShape = seqPayload.mapShape;
+                vectorTensor = seqPayload.vectorTensor;
+                vectorShape = seqPayload.vectorShape;
+            } else {
+                useSequence = false;
+            }
+        }
+        if (!useSequence) {
+            mapTensor = BNBMLFeatureEncoder.ToNCHWFloat32(encoded.state_map);
+            mapShape = [1, encoded.state_map[0][0].length, encoded.state_map.length, encoded.state_map[0].length];
+            vectorTensor = this.FitStateVectorForModel(encoded.state_vector, vecDim);
+            vectorShape = [1, vectorTensor.length];
+            this.State.modelInputMode = "single";
+            this.State.modelSequenceLen = 1;
+        }
+        chosenInputMode = useSequence ? "sequence" : "single";
 
         this.State.inflight = true;
         session.run({
-            [mapName]: new window.ort.Tensor("float32", mapTensor, [1, encoded.state_map[0][0].length, encoded.state_map.length, encoded.state_map[0].length]),
-            [vecName]: new window.ort.Tensor("float32", vectorTensor, [1, vectorTensor.length])
+            [mapName]: new window.ort.Tensor("float32", mapTensor, mapShape),
+            [vecName]: new window.ort.Tensor("float32", vectorTensor, vectorShape)
         }).then(function(outputs) {
             var decodedOutputs = self.DecodeModelOutputs(outputs, outputNames);
             var decoded = self.SoftmaxArgmax(decodedOutputs.logits);
             var latency = Date.now() - startedAt;
+            if (chosenInputMode === "sequence") {
+                self.State.sequencePathHits += 1;
+            } else {
+                self.State.singlePathHits += 1;
+            }
             self.State.inferenceCount += 1;
             self.State.avgLatencyMs = self.State.avgLatencyMs <= 0
                 ? latency
@@ -1860,13 +2796,18 @@ var BNBMLRuntime = {
                 probs: decoded.probs,
                 risk_score: decodedOutputs.risk_score,
                 action_dim: ResolveBNBMLModelActionDim(decodedOutputs.action_dim),
-                mapKey: MapKey(currentMap.X, currentMap.Y)
+                mapKey: MapKey(currentMap.X, currentMap.Y),
+                input_mode: self.State.modelInputMode,
+                sequence_len: self.State.modelSequenceLen
             };
             self.State.modelActionDim = ResolveBNBMLModelActionDim(decodedOutputs.action_dim);
+            self.State.error = "";
             self.State.inflight = false;
             self.PublishState();
         }).catch(function(err) {
-            self.State.error = String(err && err.message ? err.message : err);
+            var msg = String(err && err.message ? err.message : err);
+            self.UpdateRankHintsFromError(msg, mapName, vecName);
+            self.State.error = msg;
             self.State.inflight = false;
             self.PublishState();
         });
@@ -2043,6 +2984,8 @@ var BNBMLRuntime = {
         var s = this.State;
         var totalDecision = s.usedCount + s.fallbackCount;
         var fallbackRate = totalDecision > 0 ? s.fallbackCount / totalDecision : 0;
+        var totalPaths = (s.sequencePathHits || 0) + (s.singlePathHits || 0);
+        var sequencePathHitRate = totalPaths > 0 ? (s.sequencePathHits || 0) / totalPaths : 0;
         var survivalRate = ComputeSurvivalRate(s.bombedCount, s.spawnedBubblesEffective);
         if (typeof window === "undefined") {
             return;
@@ -2066,6 +3009,12 @@ var BNBMLRuntime = {
             fallback_rate: fallbackRate,
             avg_latency_ms: s.avgLatencyMs,
             model_action_dim: s.modelActionDim,
+            model_vector_dim: s.modelVectorDim,
+            model_sequence_len: s.modelSequenceLen || 1,
+            model_input_mode: s.modelInputMode || "single",
+            sequence_path_hits: s.sequencePathHits || 0,
+            single_path_hits: s.singlePathHits || 0,
+            sequence_path_hit_rate: sequencePathHitRate,
             action_hist: JSON.parse(JSON.stringify(s.actionHist)),
             latest_prediction: s.latestPrediction ? {
                 ts: s.latestPrediction.ts,
@@ -2073,7 +3022,9 @@ var BNBMLRuntime = {
                 confidence: s.latestPrediction.confidence,
                 risk_score: typeof s.latestPrediction.risk_score === "number" ? s.latestPrediction.risk_score : null,
                 action_dim: s.latestPrediction.action_dim || s.modelActionDim || BNBMLActionSpace.MAX_DIM,
-                mapKey: s.latestPrediction.mapKey
+                mapKey: s.latestPrediction.mapKey,
+                input_mode: s.latestPrediction.input_mode || (s.modelInputMode || "single"),
+                sequence_len: s.latestPrediction.sequence_len || (s.modelSequenceLen || 1)
             } : null,
             spawned_bubbles: s.spawnedBubblesEffective,
             spawned_bubbles_effective: s.spawnedBubblesEffective,
@@ -2094,6 +3045,9 @@ BNBMLDatasetCollector.Init();
 BNBMLRuntime.Init();
 
 if (typeof window !== "undefined") {
+    window.BNBMLFeatureEncoder = BNBMLFeatureEncoder;
+    window.BNBMLDatasetCollector = BNBMLDatasetCollector;
+    window.BNBMLActionSpace = BNBMLActionSpace;
     window.BNBMLCollectorDrain = function(maxRows) {
         return BNBMLDatasetCollector.Drain(maxRows);
     };
@@ -3018,6 +3972,7 @@ function PickNextFrameMovementChoice(role, currentMap, snapshot, options) {
     var futureMapPoint;
     var footState;
     var nextMap;
+    var targetMap;
     var travelPenalty;
     var unsafeEtaPenalty;
     var best = null;
@@ -3051,8 +4006,14 @@ function PickNextFrameMovementChoice(role, currentMap, snapshot, options) {
         if (opts.disallowStay && c.direction == null) {
             continue;
         }
-        if (c.direction != null && !IsAIWalkable(nextMap.X, nextMap.Y)) {
-            continue;
+        if (c.direction == null) {
+            targetMap = { X: currentMap.X, Y: currentMap.Y };
+        }
+        else {
+            targetMap = BuildTargetMapByAction(currentMap, EncodeDirectionToAction(c.direction));
+            if (!IsInsideMap(targetMap.X, targetMap.Y) || !IsAIWalkable(targetMap.X, targetMap.Y)) {
+                continue;
+            }
         }
 
         footState = GetRoleFootStateFromMapPoint(futureMapPoint, snapshot, Date.now() + nextFrameMs);
@@ -3067,7 +4028,7 @@ function PickNextFrameMovementChoice(role, currentMap, snapshot, options) {
         }
 
         travelPenalty = c.direction == null ? 0 : 1;
-        exits = CountSafeNeighborTiles(nextMap.X, nextMap.Y, snapshot);
+        exits = CountSafeNeighborTiles(targetMap.X, targetMap.Y, snapshot);
         unsafeEtaPenalty = Math.min(
             GetUnsafeBufferPenaltyByMapNo(footState.leftNo, snapshot),
             GetUnsafeBufferPenaltyByMapNo(footState.rightNo, snapshot)
@@ -3089,7 +4050,7 @@ function PickNextFrameMovementChoice(role, currentMap, snapshot, options) {
             bestScore = score;
             best = {
                 direction: c.direction,
-                targetMap: { X: nextMap.X, Y: nextMap.Y },
+                targetMap: { X: targetMap.X, Y: targetMap.Y },
                 safeRank: safeRank,
                 footState: footState,
                 unsafeEtaPenalty: unsafeEtaPenalty,
@@ -3132,6 +4093,43 @@ function IsTileUnsafeNow(key, snapshot) {
         return false;
     }
     return !!src.threatMap[key];
+}
+
+function GetDangerEtaByMapNo(mapNo, snapshot) {
+    var src = snapshot || LastThreatSnapshot;
+    var key;
+    var eta;
+    if (!src || !src.dangerEtaMap || mapNo < 0) {
+        return null;
+    }
+    key = MapKey(mapNo % 15, parseInt(mapNo / 15, 10));
+    eta = src.dangerEtaMap[key];
+    return typeof eta === "number" ? eta : null;
+}
+
+function GetRoleFootMinDangerEta(role, snapshot, sampleTime) {
+    var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+    var at = typeof sampleTime === "number" ? sampleTime : Date.now();
+    var footState;
+    var leftEta;
+    var rightEta;
+    var best = Infinity;
+    if (!role || typeof role.MapPoint !== "function") {
+        return null;
+    }
+    footState = GetRoleFootStateFromMapPoint(role.MapPoint(), src, at);
+    if (!footState) {
+        return null;
+    }
+    leftEta = GetDangerEtaByMapNo(footState.leftNo, src);
+    rightEta = GetDangerEtaByMapNo(footState.rightNo, src);
+    if (typeof leftEta === "number") {
+        best = Math.min(best, leftEta);
+    }
+    if (typeof rightEta === "number") {
+        best = Math.min(best, rightEta);
+    }
+    return best === Infinity ? null : best;
 }
 
 function EstimateEscapeSteps(startX, startY, snapshot, minExits, maxDepth) {
@@ -3252,7 +4250,8 @@ function CountSafeNeighborTiles(x, y, snapshot) {
 
 function AddSimulatedBombThreat(baseThreatMap, bombX, bombY, strong) {
     var sim = {};
-    for (var k in baseThreatMap) sim[k] = true;
+    var sourceThreat = baseThreatMap || {};
+    for (var k in sourceThreat) sim[k] = true;
     var cid = bombY * 15 + bombX;
     var bp = FindPaopaoBombXY(cid, strong);
     var all = bp.X.concat(bp.Y);
@@ -3265,34 +4264,8 @@ function AddSimulatedBombThreat(baseThreatMap, bombX, bombY, strong) {
 
 // 从 bombPos 出发，在模拟威胁地图中找到最近的安全格
 function FindEscapeRoute(fromX, fromY, bombX, bombY, strong, currentThreatMap) {
-    var simThreat = AddSimulatedBombThreat(currentThreatMap, bombX, bombY, strong);
-    var queue = [{x: fromX, y: fromY}];
-    var visited = {};
-    var distMap = {};
-    var sk = MapKey(fromX, fromY);
-    visited[sk] = true;
-    distMap[sk] = 0;
-    var head = 0;
-
-    while (head < queue.length) {
-        var cur = queue[head++];
-        var ck = MapKey(cur.x, cur.y);
-        if (distMap[ck] > 0 && !simThreat[ck]) {
-            return {X: cur.x, Y: cur.y};
-        }
-        if (distMap[ck] >= 8) continue;
-        for (var i = 0; i < 4; i++) {
-            var nx = cur.x + DIRS[i].dx;
-            var ny = cur.y + DIRS[i].dy;
-            var nk = MapKey(nx, ny);
-            if (visited[nk] || !IsAIWalkable(nx, ny)) continue;
-            visited[nk] = true;
-            distMap[nk] = distMap[ck] + 1;
-            queue.push({x: nx, y: ny});
-        }
-    }
-
-    return null;
+    var plan = BuildBombEscapePlan(fromX, fromY, bombX, bombY, strong, currentThreatMap || {});
+    return plan ? plan.targetMap : null;
 }
 
 // =============================================================================
@@ -3305,6 +4278,17 @@ function GetSinglePlayerPlayer() {
         if (RoleStorage[i].RoleNumber === 1 && !RoleStorage[i].IsDeath) return RoleStorage[i];
     }
     return null;
+}
+
+function GetPrimaryBattleTarget(selfRole) {
+    var enemies;
+    if (singlePlayerState && singlePlayerState.Mode === "expert_duel_1v1" && selfRole) {
+        enemies = FindAllEnemies(selfRole);
+        if (enemies.length > 0) {
+            return enemies[0];
+        }
+    }
+    return GetSinglePlayerPlayer();
 }
 
 function FindAllEnemies(selfRole) {
@@ -3615,13 +4599,15 @@ AIEvolution.runBootcamp(AIBootcampRounds);
 // Monster 类
 // =============================================================================
 
-var Monster = function() {
-    this.Role = new Role(2);
-    this.Role.Offset = new Size(0, 17);
-    this.Role.RideSize = new Size(56, 60);
-    this.Role.Object.Size = new Size(56, 67);
-    this.Role.AniSize = new Size(56, 70);
-    this.Role.DieSize = new Size(56, 98);
+var Monster = function(existingRole) {
+    this.Role = existingRole || new Role(2);
+    if (!existingRole) {
+        this.Role.Offset = new Size(0, 17);
+        this.Role.RideSize = new Size(56, 60);
+        this.Role.Object.Size = new Size(56, 67);
+        this.Role.AniSize = new Size(56, 70);
+        this.Role.DieSize = new Size(56, 98);
+    }
     this.Role.SetMoveSpeedPxPerSec(RoleBalanceConfig.InitialSpeedPxPerSec);
     this.Role.PaopaoStrong = ClampRolePower(RoleBalanceConfig.InitialPower);
     this.Role.CanPaopaoLength = ClampRoleBubbleCount(RoleBalanceConfig.InitialBubbleCount);
@@ -3643,6 +4629,9 @@ var Monster = function() {
     this.LastTemporalReplanAt = 0;
     this.TemporalFallbackTriggerCount = 0;
     this.ActiveThinkIntervalMs = MonsterThinkInterval;
+    this.BattleLastEvadeTargetKey = "";
+    this.BattlePrevEvadeTargetKey = "";
+    this.BattleLastEvadeAt = 0;
 };
 
 Monster.prototype.SetMap = function(x, y) {
@@ -3680,6 +4669,370 @@ Monster.prototype.DropBomb = function() {
     }
     this.Role.PaoPao();
     this.ClearTarget();
+};
+
+Monster.prototype.RecordBattleEvadeTarget = function(targetMap) {
+    var key;
+    if (!targetMap) {
+        return;
+    }
+    key = MapKey(targetMap.X, targetMap.Y);
+    this.BattlePrevEvadeTargetKey = this.BattleLastEvadeTargetKey || "";
+    this.BattleLastEvadeTargetKey = key;
+    this.BattleLastEvadeAt = Date.now();
+};
+
+Monster.prototype.ShouldPreEvadeByBombETA = function(currentMap, snapshot) {
+    var src = snapshot || LastThreatSnapshot || BuildThreatSnapshot();
+    var key;
+    var currentEta;
+    var footEta;
+    var thinkMs;
+    var preEvadeMs;
+    var chokePreEvadeMs;
+    var exits;
+    var activeBombs;
+    var now;
+    var future1;
+    var future2;
+    if (!currentMap || !src) {
+        return false;
+    }
+    key = MapKey(currentMap.X, currentMap.Y);
+    currentEta = src && src.dangerEtaMap ? src.dangerEtaMap[key] : null;
+    now = src.now || Date.now();
+    footEta = GetRoleFootMinDangerEta(this.Role, src, now);
+    thinkMs = this.ActiveThinkIntervalMs || MonsterThinkInterval;
+    preEvadeMs = Math.max(300, AIDodgePolicy.safeBufferMs + thinkMs * 2);
+    chokePreEvadeMs = preEvadeMs + 180;
+    exits = CountSafeNeighborTiles(currentMap.X, currentMap.Y, src);
+    activeBombs = CountActiveBombs();
+    if (this.Role && typeof this.Role.MapPoint === "function") {
+        future1 = GetRoleFootStateFromMapPoint(this.Role.MapPoint(), src, now + thinkMs);
+        future2 = GetRoleFootStateFromMapPoint(this.Role.MapPoint(), src, now + thinkMs * 2);
+    }
+
+    if (typeof currentEta === "number" && currentEta <= preEvadeMs) {
+        return true;
+    }
+    if (typeof footEta === "number" && footEta <= preEvadeMs) {
+        return true;
+    }
+    if (future1 && !future1.isSafe && !future1.isHalfSafe) {
+        return true;
+    }
+    if (future2 && !future2.isSafe && !future2.isHalfSafe) {
+        return true;
+    }
+    if (activeBombs > 0 && exits <= 1) {
+        if ((typeof currentEta === "number" && currentEta <= chokePreEvadeMs)
+            || (typeof footEta === "number" && footEta <= chokePreEvadeMs)) {
+            return true;
+        }
+    }
+    return false;
+};
+
+Monster.prototype.BuildBattleEvadeCandidates = function(currentMap, snapshot, options) {
+    var role = this.Role;
+    var now = Date.now();
+    var opts = options || {};
+    var mapPoint;
+    var nextFrameMs;
+    var step;
+    var minExits;
+    var candidates;
+    var out = [];
+    var i;
+    var c;
+    var futureMapPoint;
+    var nextMap;
+    var footState;
+    var safeRank;
+    var travelPenalty;
+    var exits;
+    var unsafeEtaPenalty;
+    var halfBodyBufferOk;
+    var score;
+    var targetMap;
+    var thinkMs;
+    var footStateT1;
+    var footStateT2;
+    var strictUnsafeT1;
+    var strictUnsafeT2;
+
+    if (!role || !currentMap) {
+        return out;
+    }
+    mapPoint = role.MapPoint();
+    nextFrameMs = Math.max(16, Math.round(1000 / 60));
+    thinkMs = Math.max(nextFrameMs, this.ActiveThinkIntervalMs || MonsterThinkInterval);
+    step = Math.max(1, role.MoveStep || 1);
+    minExits = typeof opts.minExits === "number" ? Math.max(1, opts.minExits) : 1;
+    candidates = [
+        { direction: null, dx: 0, dy: 0 },
+        { direction: Direction.Up, dx: 0, dy: -step },
+        { direction: Direction.Down, dx: 0, dy: step },
+        { direction: Direction.Left, dx: -step, dy: 0 },
+        { direction: Direction.Right, dx: step, dy: 0 }
+    ];
+
+    for (i = 0; i < candidates.length; i++) {
+        c = candidates[i];
+        futureMapPoint = {
+            X: mapPoint.X + c.dx,
+            Y: mapPoint.Y + c.dy
+        };
+        nextMap = GetMapIDByRelativePoint(futureMapPoint.X, futureMapPoint.Y);
+        if (!nextMap) {
+            continue;
+        }
+        if (opts.disallowStay && c.direction == null) {
+            continue;
+        }
+        if (c.direction == null) {
+            targetMap = { X: currentMap.X, Y: currentMap.Y };
+        }
+        else {
+            targetMap = BuildTargetMapByAction(currentMap, EncodeDirectionToAction(c.direction));
+            if (!IsInsideMap(targetMap.X, targetMap.Y) || !IsAIWalkable(targetMap.X, targetMap.Y)) {
+                continue;
+            }
+        }
+
+        footState = GetRoleFootStateFromMapPoint(futureMapPoint, snapshot, now + nextFrameMs);
+        footStateT1 = GetRoleFootStateFromMapPoint(futureMapPoint, snapshot, now + thinkMs);
+        footStateT2 = GetRoleFootStateFromMapPoint(futureMapPoint, snapshot, now + thinkMs * 2);
+        strictUnsafeT1 = !!(footStateT1 && !footStateT1.isSafe && !footStateT1.isHalfSafe);
+        strictUnsafeT2 = !!(footStateT2 && !footStateT2.isSafe && !footStateT2.isHalfSafe);
+        if (footState.isSafe) {
+            safeRank = 0;
+        }
+        else if (footState.isHalfSafe) {
+            safeRank = 1;
+        }
+        else {
+            safeRank = 2;
+        }
+        travelPenalty = c.direction == null ? 0 : 1;
+        exits = CountSafeNeighborTiles(targetMap.X, targetMap.Y, snapshot);
+        unsafeEtaPenalty = Math.min(
+            GetUnsafeBufferPenaltyByMapNo(footState.leftNo, snapshot),
+            GetUnsafeBufferPenaltyByMapNo(footState.rightNo, snapshot)
+        );
+        if (unsafeEtaPenalty === 9999) {
+            unsafeEtaPenalty = 5000;
+        }
+        halfBodyBufferOk = safeRank !== 1 || unsafeEtaPenalty >= AIDodgePolicy.halfBodyMinEtaMs;
+        score = safeRank * 100000 + travelPenalty * 1000 + (5000 - unsafeEtaPenalty);
+        if (!halfBodyBufferOk) {
+            score += 65000;
+        }
+        if (exits < minExits) {
+            score += (minExits - exits) * 4200;
+        }
+        // 强约束：尽量避免在水柱仍存活窗口里出现“双脚同帧非安全”。
+        if (strictUnsafeT1) {
+            score += 110000;
+        }
+        if (strictUnsafeT2) {
+            score += 140000;
+        }
+        out.push({
+            direction: c.direction,
+            targetMap: { X: targetMap.X, Y: targetMap.Y },
+            safeRank: safeRank,
+            footState: footState,
+            footStateT1: footStateT1,
+            footStateT2: footStateT2,
+            strictUnsafeT1: strictUnsafeT1,
+            strictUnsafeT2: strictUnsafeT2,
+            unsafeEtaPenalty: unsafeEtaPenalty,
+            halfBodyBufferOk: halfBodyBufferOk,
+            safeNeighbors: exits,
+            score: score
+        });
+    }
+    out.sort(function(a, b) {
+        return a.score - b.score;
+    });
+    return out;
+};
+
+Monster.prototype.IsHalfBodyBattleChoiceTooRisky = function(choice, snapshot) {
+    var targetMap;
+    var belowKey;
+    var moveHorizontal;
+    var lowerLeftKey;
+    var lowerRightKey;
+    var lowerDiagThreat;
+    var threshold = Math.max(AIDodgePolicy.halfBodyMinEtaMs + 120, 340);
+    if (!choice || choice.safeRank !== 1) {
+        return false;
+    }
+    if (!choice.halfBodyBufferOk) {
+        return true;
+    }
+    if (typeof choice.unsafeEtaPenalty === "number" && choice.unsafeEtaPenalty < threshold) {
+        return true;
+    }
+    targetMap = choice.targetMap;
+    if (!targetMap || !IsInsideMap(targetMap.X, targetMap.Y + 1)) {
+        return false;
+    }
+    belowKey = MapKey(targetMap.X, targetMap.Y + 1);
+    // 半身高危：下方爆炸横向掠过时，当前引擎命中连续帧风险高，直接禁用该候选
+    if (IsTileUnsafeNow(belowKey, snapshot) || IsTileThreatSoon(belowKey, 160, snapshot)) {
+        return true;
+    }
+    moveHorizontal = choice.direction === Direction.Left || choice.direction === Direction.Right;
+    if (!moveHorizontal) {
+        return false;
+    }
+    lowerDiagThreat = false;
+    if (IsInsideMap(targetMap.X - 1, targetMap.Y + 1)) {
+        lowerLeftKey = MapKey(targetMap.X - 1, targetMap.Y + 1);
+        if (IsTileUnsafeNow(lowerLeftKey, snapshot) || IsTileThreatSoon(lowerLeftKey, 180, snapshot)) {
+            lowerDiagThreat = true;
+        }
+    }
+    if (IsInsideMap(targetMap.X + 1, targetMap.Y + 1)) {
+        lowerRightKey = MapKey(targetMap.X + 1, targetMap.Y + 1);
+        if (IsTileUnsafeNow(lowerRightKey, snapshot) || IsTileThreatSoon(lowerRightKey, 180, snapshot)) {
+            lowerDiagThreat = true;
+        }
+    }
+    // 横移+半身时，下对角命中在当前判定模型里极易形成必死帧；上对角可视为可容忍半身保护。
+    if (lowerDiagThreat) {
+        return true;
+    }
+    return false;
+};
+
+Monster.prototype.SelectBattleEvadeTarget = function(currentMap, snapshot) {
+    var role = this.Role;
+    var now = Date.now();
+    var currentKey = currentMap ? MapKey(currentMap.X, currentMap.Y) : "";
+    var currentUnsafeFrames = role ? (role.ExplosionUnsafeFrameCount || 0) : 0;
+    var currentFoot = role ? GetRoleFootStateFromMapPoint(role.MapPoint(), snapshot, now) : null;
+    var currentStrictUnsafe = !!(currentFoot && !currentFoot.isSafe && !currentFoot.isHalfSafe);
+    var currentThreatNow = !!(currentKey && IsTileUnsafeNow(currentKey, snapshot));
+    var etaForceMove = this.ShouldPreEvadeByBombETA(currentMap, snapshot);
+    var mustMove = currentThreatNow || currentUnsafeFrames >= 1 || currentStrictUnsafe || etaForceMove;
+    var hardUnsafeNow = currentThreatNow || currentUnsafeFrames >= 1 || currentStrictUnsafe;
+    var minExits = hardUnsafeNow ? 2 : 1;
+    var avoidReverseWindowMs = Math.max(420, AIDodgePolicy.repathMs * 2);
+    var candidates = this.BuildBattleEvadeCandidates(currentMap, snapshot, {
+        disallowStay: mustMove,
+        minExits: minExits
+    });
+    var fallbackTarget = null;
+    var riskyFallbackTarget = null;
+    var i;
+    var c;
+    var candidateKey;
+
+    for (i = 0; i < candidates.length; i++) {
+        c = candidates[i];
+        if (!riskyFallbackTarget && c.targetMap) {
+            riskyFallbackTarget = c.targetMap;
+        }
+        if (!fallbackTarget && c.targetMap && !c.strictUnsafeT1 && !c.strictUnsafeT2) {
+            fallbackTarget = c.targetMap;
+        }
+        if (mustMove && c.safeRank >= 2) {
+            continue;
+        }
+        if (c.strictUnsafeT1 || c.strictUnsafeT2) {
+            continue;
+        }
+        if (this.IsHalfBodyBattleChoiceTooRisky(c, snapshot)) {
+            continue;
+        }
+        candidateKey = MapKey(c.targetMap.X, c.targetMap.Y);
+        if (this.BattlePrevEvadeTargetKey
+            && candidateKey === this.BattlePrevEvadeTargetKey
+            && now - this.BattleLastEvadeAt < avoidReverseWindowMs
+            && candidates.length > 1) {
+            continue;
+        }
+        this.RecordBattleEvadeTarget(c.targetMap);
+        return c.targetMap;
+    }
+    if (fallbackTarget) {
+        this.RecordBattleEvadeTarget(fallbackTarget);
+        return fallbackTarget;
+    }
+    if (riskyFallbackTarget) {
+        this.RecordBattleEvadeTarget(riskyFallbackTarget);
+        return riskyFallbackTarget;
+    }
+    return null;
+};
+
+Monster.prototype.SelectCalmBattleAction = function(currentMap, threatMap, snapshot, player) {
+    var role = this.Role;
+    var candidates = [];
+    var breakAction;
+    var breakDist;
+    var breakScore;
+    var enemyMap;
+    var attackPos;
+    var attackDist;
+    var enemyDist;
+    var attackScore;
+    var best;
+    if (!role || !currentMap) {
+        return null;
+    }
+
+    breakAction = this.FindBoxAction(currentMap, threatMap);
+    if (breakAction) {
+        breakDist = Math.abs(currentMap.X - breakAction.X) + Math.abs(currentMap.Y - breakAction.Y);
+        breakScore = 74 - breakDist * 6;
+        if (breakAction.bomb) {
+            breakScore += 22;
+        }
+        if (!this.IsFullyBuffed()) {
+            breakScore += 12;
+        }
+        if (this.CanDropBomb() && CanMonsterDropBombSafely(this, currentMap, snapshot)) {
+            breakScore += 8;
+        }
+        candidates.push({
+            kind: "break",
+            score: breakScore,
+            action: breakAction
+        });
+    }
+
+    if (player && !player.IsDeath) {
+        enemyMap = player.CurrentMapID();
+        attackPos = this.FindAttackPosition(player, currentMap, threatMap);
+        if (enemyMap && attackPos) {
+            attackDist = Math.abs(currentMap.X - attackPos.X) + Math.abs(currentMap.Y - attackPos.Y);
+            enemyDist = Math.abs(currentMap.X - enemyMap.X) + Math.abs(currentMap.Y - enemyMap.Y);
+            attackScore = 56 - attackDist * 7 + Math.max(0, 6 - enemyDist) * 5;
+            attackScore += (typeof AIEvolution.aggression === "number" ? AIEvolution.aggression : 0.5) * 7;
+            if (enemyDist <= Math.max(2, role.PaopaoStrong + 1)) {
+                attackScore += 10;
+            }
+            candidates.push({
+                kind: "attack_move",
+                score: attackScore,
+                action: attackPos
+            });
+        }
+    }
+
+    if (candidates.length <= 0) {
+        return null;
+    }
+    candidates.sort(function(a, b) {
+        return b.score - a.score;
+    });
+    best = candidates[0];
+    return best || null;
 };
 
 Monster.prototype.GetThinkIntervalMs = function() {
@@ -3743,14 +5096,26 @@ Monster.prototype.Think = function() {
     var threatSnapshot;
     var threatMap;
     var currentKey;
-    var player = GetSinglePlayerPlayer();
+    var player = GetPrimaryBattleTarget(role);
     var now = Date.now();
     var stuckTarget;
+    var activeBombsNow;
+    var isCalmSafeNoThreat;
+    var calmAction;
+    var shouldPreEvade;
+    var hasActiveExplosionWindow;
     if (!currentMap) return;
     currentKey = MapKey(currentMap.X, currentMap.Y);
 
     threatSnapshot = BuildThreatSnapshot();
     threatMap = threatSnapshot.threatMap;
+    activeBombsNow = CountActiveBombs();
+    hasActiveExplosionWindow = !!(
+        threatSnapshot
+        && threatSnapshot.eventSnapshot
+        && Array.isArray(threatSnapshot.eventSnapshot.activeWindows)
+        && threatSnapshot.eventSnapshot.activeWindows.length > 0
+    );
 
     // 已到达目标 → 清除，允许重新选择
     if (this.LastTargetKey === currentKey) {
@@ -3786,18 +5151,28 @@ Monster.prototype.Think = function() {
         return;
     }
 
-    var mlDecision = this.TryOfflineMLDodgeAction(currentMap, threatSnapshot, "battle");
-    if (mlDecision && mlDecision.handled) {
-        return;
-    }
+    var mlDecision = null;
 
-    // ───── 1. EVADE — 处于危险区时立即逃跑 ─────
-    if (threatMap[currentKey]) {
+    // ───── 1. EVADE — 处于危险区/连续非安全命中/ETA 临近时优先规避 ─────
+    shouldPreEvade = this.ShouldPreEvadeByBombETA(currentMap, threatSnapshot);
+    if (threatMap[currentKey] || (role.ExplosionUnsafeFrameCount || 0) >= 1 || shouldPreEvade) {
         this.AttackPlan = null;
         this.State = "evade";
-        var safe = this.FindSafeTile(currentMap, threatMap, threatSnapshot);
+        var safe = this.SelectBattleEvadeTarget(currentMap, threatSnapshot);
+        if (!safe && shouldPreEvade) {
+            var forcedCandidates = this.BuildBattleEvadeCandidates(currentMap, threatSnapshot, {
+                disallowStay: true,
+                minExits: 1
+            });
+            if (forcedCandidates && forcedCandidates.length > 0 && forcedCandidates[0].targetMap) {
+                safe = forcedCandidates[0].targetMap;
+            }
+        }
+        if (!safe) {
+            safe = this.FindSafeTile(currentMap, threatMap, threatSnapshot);
+        }
         if (safe) {
-            this.MoveToMap(safe);
+            this.MoveToMap(safe, true);
             if (BNBMLRuntime && typeof BNBMLRuntime.RecordRuleCall === "function") {
                 BNBMLRuntime.RecordRuleCall("rule_evade_move");
             }
@@ -3805,7 +5180,7 @@ Monster.prototype.Think = function() {
                 BNBMLRuntime.RecordRuleDecision(
                     currentMap,
                     safe,
-                    mlDecision && mlDecision.attempted ? ("fallback_" + (mlDecision.reason || "unknown")) : "rule_evade"
+                    "rule_evade"
                 );
             }
         }
@@ -3817,11 +5192,111 @@ Monster.prototype.Think = function() {
                 BNBMLRuntime.RecordRuleDecision(
                     currentMap,
                     currentMap,
-                    mlDecision && mlDecision.attempted ? ("fallback_" + (mlDecision.reason || "unknown") + "_wait") : "rule_evade_wait"
+                    "rule_evade_wait"
                 );
             }
         }
         return;
+    }
+
+    // 水柱活动窗口中只做生存机动，不切入进攻/吃道具，直到危险窗口结束。
+    if (hasActiveExplosionWindow) {
+        this.AttackPlan = null;
+        this.State = "evade";
+        var windowSafe = this.SelectBattleEvadeTarget(currentMap, threatSnapshot);
+        if (!windowSafe) {
+            windowSafe = this.FindSafeTile(currentMap, threatMap, threatSnapshot);
+        }
+        if (!windowSafe) {
+            var windowForced = this.BuildBattleEvadeCandidates(currentMap, threatSnapshot, {
+                disallowStay: true,
+                minExits: 1
+            });
+            if (windowForced && windowForced.length > 0 && windowForced[0].targetMap) {
+                windowSafe = windowForced[0].targetMap;
+            }
+        }
+        if (windowSafe) {
+            this.MoveToMap(windowSafe, true);
+        }
+        return;
+    }
+
+    mlDecision = this.TryOfflineMLDodgeAction(currentMap, threatSnapshot, "battle");
+    if (mlDecision && mlDecision.handled) {
+        return;
+    }
+
+    // ───── 专项优先级：COLLECT（先拿资源） ─────
+    var priorityItem = this.FindBestItem(currentMap, threatMap);
+    if (priorityItem) {
+        this.State = "collect";
+        this.MoveToMap(priorityItem, true);
+        return;
+    }
+    isCalmSafeNoThreat = activeBombsNow === 0
+        && !threatMap[currentKey]
+        && !IsTileThreatSoon(currentKey, 240, threatSnapshot);
+
+    // ───── 专项优先级：SAFE_DROP_BOMB（可逃生才放，放后立刻撤离） ─────
+    if (player && !player.IsDeath && this.CanDropBomb() && CanMonsterDropBombSafely(this, currentMap, threatSnapshot)) {
+        var playerMapForBomb = player.CurrentMapID();
+        var bombEscapePlan = GetMonsterBombEscapePlan(this, currentMap, threatSnapshot);
+        var distToPlayer = playerMapForBomb
+            ? ManhattanDist(currentMap.X, currentMap.Y, playerMapForBomb.X, playerMapForBomb.Y)
+            : 999;
+        var canPressureByRange = playerMapForBomb
+            && (distToPlayer <= Math.max(2, role.PaopaoStrong + 1)
+                || this.WouldBlastReach(currentMap.X, currentMap.Y, role.PaopaoStrong, playerMapForBomb.X, playerMapForBomb.Y));
+        if (bombEscapePlan && bombEscapePlan.firstStep && canPressureByRange) {
+            this.State = "safe_drop_bomb";
+            this.DropBomb();
+            this.MoveToMap(bombEscapePlan.firstStep, true);
+            return;
+        }
+    }
+
+    // ───── CALM_DECISION — 安全且无可吃道具时，按局势评分选择推进动作（追击站位/炸障碍） ─────
+    if (isCalmSafeNoThreat) {
+        calmAction = this.SelectCalmBattleAction(currentMap, threatMap, threatSnapshot, player);
+        if (calmAction) {
+            if (calmAction.kind === "break") {
+                this.State = "break";
+                if (calmAction.action.bomb && this.CanDropBomb()) {
+                    var proactiveBreakEscape = GetMonsterBombEscapePlan(this, currentMap, threatSnapshot);
+                    if (proactiveBreakEscape && proactiveBreakEscape.firstStep) {
+                        this.DropBomb();
+                        this.MoveToMap(proactiveBreakEscape.firstStep, true);
+                        return;
+                    }
+                }
+                this.MoveToMap(calmAction.action, true);
+                return;
+            }
+            if (calmAction.kind === "attack_move") {
+                this.State = "attack";
+                this.MoveToMap(calmAction.action, true);
+                return;
+            }
+        }
+    }
+
+    // ───── SAFE_BREAK_FALLBACK — calm 评分未命中时，仍优先执行主动破障 ─────
+    if (isCalmSafeNoThreat) {
+        var proactiveBreak = this.FindBoxAction(currentMap, threatMap);
+        if (proactiveBreak) {
+            this.State = "break";
+            if (proactiveBreak.bomb && this.CanDropBomb()) {
+                var fallbackBreakEscape = GetMonsterBombEscapePlan(this, currentMap, threatSnapshot);
+                if (fallbackBreakEscape && fallbackBreakEscape.firstStep) {
+                    this.DropBomb();
+                    this.MoveToMap(fallbackBreakEscape.firstStep, true);
+                    return;
+                }
+            }
+            this.MoveToMap(proactiveBreak, true);
+            return;
+        }
     }
 
     // ───── 2. RESCUE — 救被困泡的队友 ─────
@@ -3870,15 +5345,11 @@ Monster.prototype.Think = function() {
 
             // 已在攻击位：放泡 + 逃跑
             if (dist === 1 && this.CanDropBomb()) {
-                var escape = FindEscapeRoute(
-                    currentMap.X, currentMap.Y,
-                    currentMap.X, currentMap.Y,
-                    role.PaopaoStrong, threatMap
-                );
-                if (escape) {
+                var escapePlan = GetMonsterBombEscapePlan(this, currentMap, threatSnapshot);
+                if (escapePlan && escapePlan.firstStep) {
                     this.State = "attack";
                     this.DropBomb();
-                    this.MoveToMap(escape);
+                    this.MoveToMap(escapePlan.firstStep, true);
                     return;
                 }
             }
@@ -3887,15 +5358,11 @@ Monster.prototype.Think = function() {
             if (dist <= role.PaopaoStrong && dist > 1 && this.CanDropBomb()) {
                 if (this.WouldBlastReach(currentMap.X, currentMap.Y, role.PaopaoStrong,
                     playerMap.X, playerMap.Y)) {
-                    var escapeRemote = FindEscapeRoute(
-                        currentMap.X, currentMap.Y,
-                        currentMap.X, currentMap.Y,
-                        role.PaopaoStrong, threatMap
-                    );
-                    if (escapeRemote) {
+                    var escapeRemotePlan = GetMonsterBombEscapePlan(this, currentMap, threatSnapshot);
+                    if (escapeRemotePlan && escapeRemotePlan.firstStep) {
                         this.State = "attack";
                         this.DropBomb();
-                        this.MoveToMap(escapeRemote);
+                        this.MoveToMap(escapeRemotePlan.firstStep, true);
                         return;
                     }
                 }
@@ -3905,7 +5372,7 @@ Monster.prototype.Think = function() {
             var atkPos = this.FindAttackPosition(player, currentMap, threatMap);
             if (atkPos) {
                 this.State = "attack";
-                this.MoveToMap(atkPos);
+                this.MoveToMap(atkPos, true);
                 return;
             }
         }
@@ -3915,7 +5382,7 @@ Monster.prototype.Think = function() {
     var item = this.FindBestItem(currentMap, threatMap);
     if (item) {
         this.State = "collect";
-        this.MoveToMap(item);
+        this.MoveToMap(item, true);
         return;
     }
 
@@ -3924,18 +5391,14 @@ Monster.prototype.Think = function() {
     if (boxAction) {
         this.State = "break";
         if (boxAction.bomb && this.CanDropBomb()) {
-            var boxEscape = FindEscapeRoute(
-                currentMap.X, currentMap.Y,
-                currentMap.X, currentMap.Y,
-                role.PaopaoStrong, threatMap
-            );
-            if (boxEscape) {
+            var boxEscapePlan = GetMonsterBombEscapePlan(this, currentMap, threatSnapshot);
+            if (boxEscapePlan && boxEscapePlan.firstStep) {
                 this.DropBomb();
-                this.MoveToMap(boxEscape);
+                this.MoveToMap(boxEscapePlan.firstStep, true);
                 return;
             }
         }
-        this.MoveToMap(boxAction);
+        this.MoveToMap(boxAction, true);
         return;
     }
 
@@ -3966,7 +5429,13 @@ Monster.prototype.TryOfflineMLDodgeAction = function(currentMap, threatSnapshot,
     var action;
     var targetMap;
     var pureMode = IsBNBMLPurePolicyMode();
-    if (!currentMap || !BNBMLRuntime || !BNBMLRuntime.ShouldUseContext(currentMap, snapshot)) {
+    var shouldUse = false;
+    if (modeTag === "battle") {
+        shouldUse = !!(BNBMLRuntime && BNBMLRuntime.State && BNBMLRuntime.State.enabled);
+    } else if (BNBMLRuntime && typeof BNBMLRuntime.ShouldUseContext === "function") {
+        shouldUse = BNBMLRuntime.ShouldUseContext(currentMap, snapshot);
+    }
+    if (!currentMap || !BNBMLRuntime || !shouldUse) {
         return { handled: false, attempted: false, reason: "context_not_applicable" };
     }
     decision = BNBMLRuntime.DecideAction(this, currentMap, snapshot);
@@ -4865,13 +6334,26 @@ Monster.prototype.FindAttackPosition = function(player, currentMap, threatMap) {
 // 道具拾取
 // =============================================================================
 
+Monster.prototype.IsFullyBuffed = function() {
+    var role = this.Role;
+    if (!role) {
+        return false;
+    }
+    return role.CanPaopaoLength >= MonsterMaxPaopaoLength
+        && role.MoveStep >= RoleConstant.MaxMoveStep
+        && role.PaopaoStrong >= RoleConstant.MaxPaopaoStrong;
+};
+
 Monster.prototype.ScoreItem = function(itemCode) {
     var role = this.Role;
+    if (!role || this.IsFullyBuffed()) {
+        return 0;
+    }
     switch (itemCode) {
-        case 101: return role.CanPaopaoLength < MonsterMaxPaopaoLength ? 3 : 0.5;
-        case 102: return role.MoveStep < RoleConstant.MaxMoveStep ? 3 : 0.5;
-        case 103: return role.PaopaoStrong < RoleConstant.MaxPaopaoStrong ? 3 : 0.5;
-        default: return 1;
+        case 101: return role.CanPaopaoLength < MonsterMaxPaopaoLength ? 3 : 0;
+        case 102: return role.MoveStep < RoleConstant.MaxMoveStep ? 3 : 0;
+        case 103: return role.PaopaoStrong < RoleConstant.MaxPaopaoStrong ? 3 : 0;
+        default: return 0;
     }
 };
 
@@ -4879,6 +6361,9 @@ Monster.prototype.FindBestItem = function(currentMap, threatMap) {
     var bfs = AIPathBFS(currentMap.X, currentMap.Y);
     var bestItem = null;
     var bestValue = -Infinity;
+    if (this.IsFullyBuffed()) {
+        return null;
+    }
 
     for (var y = 0; y < 13; y++) {
         for (var x = 0; x < 15; x++) {
@@ -4890,6 +6375,9 @@ Monster.prototype.FindBestItem = function(currentMap, threatMap) {
 
             var dist = bfs.dist[key];
             var worth = this.ScoreItem(v);
+            if (worth <= 0) {
+                continue;
+            }
             var value = worth / (dist + 1);
 
             if (value > bestValue) {
@@ -4913,7 +6401,7 @@ Monster.prototype.FindBoxAction = function(currentMap, threatMap) {
     for (var d = 0; d < 4; d++) {
         var bx = currentMap.X + DIRS[d].dx;
         var by = currentMap.Y + DIRS[d].dy;
-        if (IsInsideMap(bx, by) && townBarrierMap[by][bx] === 3) {
+        if (IsInsideMap(bx, by) && IsNonRigidBarrierNo(townBarrierMap[by][bx])) {
             var esc = FindEscapeRoute(
                 currentMap.X, currentMap.Y,
                 currentMap.X, currentMap.Y,
@@ -4932,7 +6420,7 @@ Monster.prototype.FindBoxAction = function(currentMap, threatMap) {
 
     for (var y = 0; y < 13; y++) {
         for (var x = 0; x < 15; x++) {
-            if (townBarrierMap[y][x] !== 3) continue;
+            if (!IsNonRigidBarrierNo(townBarrierMap[y][x])) continue;
 
             for (var di = 0; di < 4; di++) {
                 var ax = x + DIRS[di].dx;
@@ -5042,7 +6530,7 @@ Monster.prototype.ExecuteVAttackPlan = function(currentMap, threatMap) {
     }
 
     // 验证计划有效性
-    var player = GetSinglePlayerPlayer();
+    var player = GetPrimaryBattleTarget(this.Role);
     if (!player || player.IsDeath) { this.AttackPlan = null; return; }
 
     var playerMap = player.CurrentMapID();

@@ -25,6 +25,9 @@ var TRAINING_LOCK_FILE = path.join(TRAINING_OUTPUT_DIR, 'training-runtime.lock.j
 var TRAINING_STATE_FILE = path.join(TRAINING_OUTPUT_DIR, 'training-runtime-state.json');
 var TRAINING_FRAME_FILE = path.join(TRAINING_OUTPUT_DIR, 'training-iter5-live.png');
 var TRAINING_LOCK_STALE_MS = 15000;
+var EVAL_REPORT_DIR = path.join(__dirname, 'output', 'ml', 'reports');
+var EVAL_STATUS_FILE = path.join(EVAL_REPORT_DIR, 'combat_eval_live_status.json');
+var EVAL_FRAME_FILE = path.join(EVAL_REPORT_DIR, 'combat_eval_live_frame.png');
 
 function safeReadJSON(filepath) {
     try {
@@ -60,7 +63,7 @@ function readTrainingLock() {
 
 app.get('/', function (req, res) {
     var lock;
-    if (req.query && (req.query.train === '1' || req.query.mode === 'battle')) {
+    if (req.query && (req.query.train === '1' || req.query.mode === 'battle' || req.query.mode === 'expert_duel_1v1')) {
         res.render('index');
         return;
     }
@@ -74,6 +77,10 @@ app.get('/', function (req, res) {
 
 app.get('/viewer', function(req, res) {
     res.render('viewer');
+});
+
+app.get('/eval-viewer', function(req, res) {
+    res.render('eval_viewer');
 });
 
 app.get('/api/training/status', function(req, res) {
@@ -97,6 +104,32 @@ app.get('/api/training/frame', function(req, res) {
     }
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
     res.sendFile(TRAINING_FRAME_FILE);
+});
+
+app.get('/api/eval/status', function(req, res) {
+    var raw = safeReadJSON(EVAL_STATUS_FILE) || {};
+    var active = !!raw.active;
+    var heartbeat = typeof raw.heartbeat === 'number' ? raw.heartbeat : 0;
+    var stale = heartbeat > 0 ? ((Date.now() - heartbeat) > 15000) : false;
+    if (stale) {
+        active = false;
+    }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.json({
+        ts: Date.now(),
+        active: active,
+        stale: stale,
+        state: raw
+    });
+});
+
+app.get('/api/eval/frame', function(req, res) {
+    if (!fs.existsSync(EVAL_FRAME_FILE)) {
+        res.status(404).json({ ok: false, error: 'eval_frame_not_found' });
+        return;
+    }
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.sendFile(EVAL_FRAME_FILE);
 });
 
 io.on('connection', function (socket) {

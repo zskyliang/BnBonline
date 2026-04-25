@@ -204,7 +204,10 @@
     <script type="text/javascript">
         window.addEventListener("load", function () {
             var query = new URLSearchParams(window.location.search);
-            if (query.get("mode") === "battle") {
+            if (query.get("mode") === "expert_duel_1v1") {
+                StartExpertDuelGame();
+            }
+            else if (query.get("mode") === "battle") {
                 StartSinglePlayerGame();
             }
             else if (query.get("autostart") === "0") {

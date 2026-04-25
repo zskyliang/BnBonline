@@ -20,6 +20,16 @@ TODO / next pass:
 - Run full-browser validation and inspect screenshots to ensure panel updates + movement behavior look right.
 - If deaths remain high on full runs, increase dodge policy conservativeness (`forecastMs`, `safeBufferMs`) and lower stall timeout further.
 
+Phase 0 combat V3 balanced sampling update (2026-04-21):
+- Implementing balanced combat sampling before Phase 1 PPO.
+- Target behavior: scenario-bucket collection, terminal/pre-death/drop-bomb sample retention, aux labels for bomb escape/trap risk, and quality-gated train/eval pipeline.
+- Touched scripts:
+  - `scripts/collect-combat-dataset.js`
+  - `scripts/collect-combat-dataset-parallel.js`
+  - `ml/train_iql_combat.py`
+  - `scripts/train-combat-phase0.js`
+  - `docs/ADVERSARIAL_TRAINING_PHASES.md`
+
 Validation:
 - Ran Playwright client against local server with 6 capture iterations.
 - Verified no runtime `errors-*.json` generated in final run.
@@ -444,3 +454,130 @@ Runtime launch:
 - Restarted server via `public/game/restart-game.sh`.
 - Current battle URL:
   - `http://127.0.0.1:4000/?mode=battle&ml=1&ml_policy_mode=pure&ml_conf=0.26&ml_move_conf=0.34&ml_margin=0.03&ml_force_move_eta=460&ml_wait_block_eta=760&ml_move_threat_ms=300&ml_model=/output/ml/models/dodge_iql_v1.onnx`
+
+User-request update (2026-04-21, Phase 0 Balanced Sampling V3):
+- Implemented V3 balanced sampling plumbing:
+  - `sample_bucket` support for ongoing/pre_death/drop_bomb_safe/drop_bomb_bad/terminal.
+  - `aux_labels` support for bomb escape success, self-trap risk, enemy trap after bomb, nearest safe ETA, commitment depth, and terminal credit.
+  - parallel collector now performs global exact dedupe plus bucket-aware near-dedupe and quota merge.
+- Added scenario randomization controls:
+  - balanced scenarios: open_random, escape_after_bomb, enemy_choke, item_race, deadend_chase.
+  - random spawns, random items, soft obstacle reinjection, role power jitter, opponent pool expansion.
+- Added sampling fixes after smoke tests:
+  - active timed finalization for collection matches; collector no longer waits for natural game stop to create terminal rows.
+  - terminal tail labeling via `terminal_tail_ms` so final seconds carry done/outcome/reward.
+  - balanced-only legal `action=5` relabeling with `meta.balanced_relabel_action5` to increase drop-bomb supervision.
+  - collect-only combat bias in `bnbMonsters.js` to keep expert bomb actions from being mixed away.
+- Smoke validation:
+  - Syntax checks passed for collector, parallel collector, pipeline, combat trainer, and `bnbMonsters.js`.
+  - Single-worker 500-row smoke produced valid `state_vector=24`, `action_mask=6`, `sample_bucket`, and `aux_labels` rows.
+  - Latest smoke after relabeling showed action5 present and terminal rows present; pre_death remains distribution-sensitive and is handled by bucket-aware merge/fill in larger runs.
+- Next run command is the formal pipeline:
+  `node scripts/train-combat-phase0.js --balanced=1 --verify-frames=30000 --workers=10 --target-frames=200000 --collect-max-wall-sec=7200 --collect-match-duration-sec=18 --runs=200 --parallel=8 --epochs=60 --batch-size=512 --freeze-conv-epochs=50 --map=windmill-heart --opponent=heuristic_v2`
+
+Phase 0 sudden-death V4 update (2026-04-22):
+- Upgraded combat encoder to `state_vector=32` while keeping `state_map=13x15x10`.
+- Added explicit combat attribute slots for self/enemy bubble cap, active bubble count, enemy power/speed, current enemy shortest-path distance, and spawn shortest-path distance.
+- Extended `ml/train_iql_combat.py` aux features/weights for V4 sudden-death analysis: `terminal_reason_code`, `my_bomb_threat_score`, `close_range_duel_score`, `enemy_self_kill_episode`, `stall_abort_episode`, `winning_bomb_source_recent`.
+- Reworked `scripts/collect-combat-dataset.js` to sudden-death episode buffering:
+  - trapped (`IsInPaopao`) ends the episode immediately,
+  - revive disabled,
+  - opponent self-kill episodes discarded,
+  - partial non-rigid clear + random items,
+  - spawn shortest-path targeting,
+  - burst-cap only (removed global/near dedupe logic from the active path).
+- Fixed V4 collector commit bug: row `episode_id` is now aligned to current combat match id before buffering, so episode buffers commit correctly on terminal.
+- Reworked `scripts/eval-combat-1v1.js` to match V4 protocol:
+  - sudden-death/no-revive/stall-abort,
+  - partial clear + spawn shortest-path randomization,
+  - randomized initial role attributes,
+  - terminal reason/threat/spawn-distance metrics in match summary.
+- Added opponent-pool wiring through collect/train pipeline and compatibility alias `--opponents` -> `--opponent-pool`.
+
+Validation:
+- Syntax checks passed:
+  - `node --check scripts/eval-combat-1v1.js`
+  - `node --check scripts/collect-combat-dataset.js`
+  - `node --check scripts/collect-combat-dataset-parallel.js`
+  - `node --check scripts/train-combat-phase0.js`
+  - `python3 -m py_compile ml/train_iql_combat.py`
+- Eval smoke passed:
+  - report: `output/ml/reports/combat_phase0_eval_v4_smoke_20260422_065752.json`
+  - summary included non-empty `terminal_reason_hist` and `spawn_dist_hist`.
+- Collect smoke passed after episode-id fix:
+  - report: `output/ml/reports/combat_phase0_collect_v4_smoke_fix_20260422_065752.json`
+  - dataset: `output/ml/datasets/combat_phase0_v4_smoke_fix_20260422_065752.jsonl`
+  - confirmed one sample has `state_map=13x15x10`, `state_vector=32`, `action_mask=6`.
+
+Open issues / next pass:
+- Small collect smoke still showed `action=5` ratio at `0`, so V4 sampling now commits correctly but bomb-action coverage still needs strengthening before long-run training.
+- Small collect smoke only covered `spawn_dist_hist.7_10`; bucket coverage needs a larger run or tighter spawn-bucket control.
+- Before starting the formal 200k run, do a slightly larger verify collect with the expanded opponent pool and inspect `action5_ratio`, `terminal_reason_hist`, and spawn bucket coverage.
+
+Phase 0 expert-duel V4 verify update (2026-04-22):
+- Changed collection-side AI sampling so the trainable AI role no longer uses the current IQL/ONNX policy during data collection when `--agent-expert-duel=1`.
+- Added `--agent-pool` plumbing through:
+  - `scripts/collect-combat-dataset.js`
+  - `scripts/collect-combat-dataset-parallel.js`
+  - `scripts/train-combat-phase0.js`
+- Default collection expert pool is now `heuristic_v2,aggressive_trapper` for both sides when expert duel is enabled.
+- Added `agentExpertMode` and `opponentExpertMode` to sample metadata for auditing.
+- Added `--max-episode-ms` hard failsafe to discard and restart non-terminal long chase episodes without changing sudden-death terminal semantics.
+- Validation:
+  - syntax checks passed for collector, parallel collector, pipeline, and `public/game/bnbMonsters.js`.
+  - 1k smoke wrote partial rows with valid `state_map=13x15x10`, `state_vector=32`, `action_mask=6`, illegal actions `0`, and expert tags present.
+  - partial 30k verify was stopped because throughput stalled: rows grew from about `1174` to `1207` in the final 120s.
+  - partial report: `output/ml/reports/combat_phase0_collect_expertduel_verify30k_partial_20260422_081208.json`.
+  - partial dataset: `output/ml/datasets/combat_phase0_v4_expertduel_verify30k_partial_20260422_081208.jsonl`.
+- Partial verify metrics:
+  - rows_written: `1207` / target `30000`.
+  - action5_ratio: `0.2693`.
+  - done_ratio: `0.2386`.
+  - pre_death_ratio: `0.1616`.
+  - illegal_action_rows: `0`.
+  - terminal_reason_hist: caught_enemy `76`, caught_self `171`.
+  - spawn_dist_hist: 1_3 `371`, 4_6 `377`, 7_10 `107`, other `352`.
+- Current conclusion:
+  - expert-duel sampling improves quality and removes dependence on weak ONNX behavior.
+  - 30k fast collect is not yet feasible because too many episodes become discarded long chases or opponent-self-kill/stall episodes, and episode-buffered writes only commit on terminal.
+- Recommended next pass:
+  - add mirrored-perspective collection so opponent self-kill episodes can become valid self-kill negative samples from the opponent viewpoint instead of being fully discarded.
+  - flush selected high-value ongoing/drop-bomb-safe rows before terminal while keeping terminal rows episode-gated.
+  - add a deterministic micro-scenario generator for bomb trap / escape / item-race states to bypass slow natural rollout.
+
+Phase 0 V5 behavior-scored sampling update (2026-04-23):
+- Implemented behavior-score driven sample retention in `scripts/collect-combat-dataset.js`:
+  - samples now get `aux_labels.behavior_score`, `behavior_score_band`, `behavior_high_value`, and `behavior_score_breakdown`.
+  - high-value behavior frames stream directly instead of waiting for terminal episode commit.
+  - recent episode windows are retained for 6s terminal credit replay, with win/self-kill proximity multipliers.
+  - `stall_abort` no longer forces full episode discard; high-score rows can be retained.
+  - reports now include behavior score histograms, breakdown histograms, streaming/terminal-credit/stall counters, and high-value ratio.
+- Updated `scripts/collect-combat-dataset-parallel.js`:
+  - merge now uses behavior-score tiers (`high/mid/low`) instead of old bucket quota selection when capping rows.
+  - worker collection defaults to no screenshots to avoid timeout noise during parallel verify.
+  - report includes behavior-score merge stats and score-tier keep targets.
+- Updated `ml/train_iql_combat.py`:
+  - added aux features `behavior_score`, `behavior_high_value`, and `behavior_failure_reference`.
+  - sample weights now scale up high-value behavior rows and survival-failure references, while reducing low-value wait rows.
+- Updated `scripts/train-combat-phase0.js` to pass V5 behavior scoring flags and use behavior-oriented verify gates.
+
+Validation:
+- Syntax/compile checks passed:
+  - `node --check scripts/collect-combat-dataset.js`
+  - `node --check scripts/collect-combat-dataset-parallel.js`
+  - `node --check scripts/train-combat-phase0.js`
+  - `python3 -m py_compile ml/train_iql_combat.py`
+- Smoke collect after score calibration:
+  - report: `output/ml/reports/combat_phase0_collect_v5_behavior_smoke_20260423_071343.json`
+  - rows: `1500`, illegal actions: `0`, rows/sec: `34.49`, action5 ratio: `7.33%`, high-value ratio: `73.87%`, behavior_score_mean: `0.682`.
+- 10-worker 30k verify attempt:
+  - report: `output/ml/reports/combat_phase0_collect_v5_behavior_verify30k_20260423_071532.json`
+  - dataset: `output/ml/datasets/combat_phase0_v5_behavior_verify30k_20260423_071532.jsonl`
+  - rows: `15755/30000`, rows/sec: `15.40`, action5 ratio: `20.32%`, done ratio: `17.41%`, behavior_score_mean: `0.455`, high-value ratio: `52.46%`, illegal actions: `0`.
+  - Conclusion: sample quality gate passed, but throughput/30k completion did not. Formal 200k + training was not started.
+- Micro96 retry was stopped because it was slower under 10-browser CPU contention; increasing micro density is not the right next lever.
+
+Open issues / next pass:
+- Main bottleneck is browser/CPU contention under 10 workers, not behavior retention anymore.
+- Recommended next sampling optimization: run fewer browser workers (likely 3-5) or move micro-scenario generation out of Playwright into a pure Node/offline generator using exported map/feature utilities.
+- Do not start 200k long-run until a verify collect can reach 30k within the wall time with stable rows/sec.

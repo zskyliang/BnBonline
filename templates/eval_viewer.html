@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI 对战评估实时观战</title>
+    <style>
+        body {
+            margin: 0;
+            background: #0e1623;
+            color: #e8f1ff;
+            font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+        .page {
+            max-width: 1360px;
+            margin: 0 auto;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+        .header {
+            font-size: 20px;
+            font-weight: 700;
+            margin-bottom: 10px;
+        }
+        .sub {
+            font-size: 13px;
+            color: #9db4dc;
+            margin-bottom: 12px;
+        }
+        .layout {
+            display: flex;
+            gap: 14px;
+            align-items: flex-start;
+        }
+        .screen {
+            flex: 1;
+            min-width: 520px;
+            border-radius: 10px;
+            overflow: hidden;
+            border: 1px solid rgba(255,255,255,0.15);
+            background: #000;
+        }
+        .screen img {
+            width: 100%;
+            display: block;
+            min-height: 320px;
+            object-fit: contain;
+            background: #000;
+        }
+        .panel {
+            width: 380px;
+            max-width: 45vw;
+            border-radius: 10px;
+            background: rgba(8, 12, 22, 0.94);
+            border: 1px solid rgba(255,255,255,0.14);
+            padding: 12px;
+            box-sizing: border-box;
+        }
+        .k {
+            color: #9bb2dd;
+            font-size: 12px;
+        }
+        .v {
+            color: #fff;
+            font-size: 14px;
+            margin: 2px 0 10px 0;
+            line-height: 1.4;
+        }
+        .log-title {
+            margin-top: 8px;
+            margin-bottom: 6px;
+            font-size: 13px;
+            color: #c7d9ff;
+        }
+        .logs {
+            margin: 0;
+            padding-left: 18px;
+            max-height: 240px;
+            overflow: auto;
+            font-size: 12px;
+            color: #d8e6ff;
+            line-height: 1.4;
+        }
+    </style>
+</head>
+<body>
+<main class="page">
+    <div class="header">AI 1v1 评估实时观战</div>
+    <div class="sub" id="heartbeat">连接中...</div>
+    <section class="layout">
+        <div class="screen">
+            <img id="live-frame" alt="评估实时画面" src="/api/eval/frame">
+        </div>
+        <aside class="panel">
+            <div class="k">评估状态</div>
+            <div class="v" id="active">-</div>
+            <div class="k">进度</div>
+            <div class="v" id="progress">-</div>
+            <div class="k">当前观测局</div>
+            <div class="v" id="current">-</div>
+            <div class="k">累计胜率 / 自杀率 / 平局率</div>
+            <div class="v" id="rates">-</div>
+            <div class="k">Elo 变化 / 道具控制</div>
+            <div class="v" id="quality">-</div>
+            <div class="k">模型与对手</div>
+            <div class="v" id="meta">-</div>
+            <div class="log-title">最近结果</div>
+            <ol class="logs" id="logs"></ol>
+        </aside>
+    </section>
+</main>
+
+<script>
+(function () {
+    var frameEl = document.getElementById("live-frame");
+    var beatEl = document.getElementById("heartbeat");
+    var activeEl = document.getElementById("active");
+    var progressEl = document.getElementById("progress");
+    var currentEl = document.getElementById("current");
+    var ratesEl = document.getElementById("rates");
+    var qualityEl = document.getElementById("quality");
+    var metaEl = document.getElementById("meta");
+    var logsEl = document.getElementById("logs");
+    var frameLoading = false;
+    var FRAME_REFRESH_MS = 250;
+    var STATUS_REFRESH_MS = 700;
+
+    function text(el, value) {
+        if (!el) return;
+        el.textContent = value == null || value === "" ? "-" : String(value);
+    }
+
+    function num(v, d) {
+        var n = Number(v);
+        if (!Number.isFinite(n)) return "-";
+        return n.toFixed(d);
+    }
+
+    function renderLogs(rows) {
+        var list = Array.isArray(rows) ? rows : [];
+        var i;
+        var start = Math.max(0, list.length - 12);
+        logsEl.innerHTML = "";
+        for (i = list.length - 1; i >= start; i--) {
+            var m = list[i] || {};
+            var li = document.createElement("li");
+            li.textContent =
+                "#" + (m.run_index || "?")
+                + " " + (m.result || "-")
+                + " | ai_kills=" + (m.ai_kills || 0)
+                + " ai_deaths=" + (m.ai_deaths || 0)
+                + " self_kill=" + (m.ai_self_kills || 0);
+            logsEl.appendChild(li);
+        }
+    }
+
+    function refreshFrame() {
+        if (frameLoading) return;
+        frameLoading = true;
+        frameEl.onload = function () { frameLoading = false; };
+        frameEl.onerror = function () { frameLoading = false; };
+        frameEl.src = "/api/eval/frame?t=" + Date.now();
+    }
+
+    async function pollStatus() {
+        var res;
+        var data;
+        var st;
+        var summary;
+        var progress;
+        try {
+            res = await fetch("/api/eval/status?t=" + Date.now(), { cache: "no-store" });
+            data = await res.json();
+            st = data && data.state ? data.state : {};
+            summary = st.summary || {};
+            progress = st.progress || {};
+
+            text(beatEl, "最近更新：" + new Date().toLocaleTimeString() + " | stale=" + (data.stale ? "yes" : "no"));
+            text(activeEl, data.active ? "评估中" : "未评估/已结束");
+            text(progressEl, (progress.completed || 0) + " / " + (progress.total || 0) + "（并发 " + (progress.parallel || 0) + "）");
+            text(currentEl, "run=" + (st.current_run_index || "-") + " | match_elapsed=" + (st.current_match_elapsed_sec == null ? "-" : num(st.current_match_elapsed_sec, 1) + "s"));
+            text(ratesEl, "win=" + num(summary.win_rate || 0, 4) + " | self_kill=" + num(summary.self_kill_rate || 0, 4) + " | draw=" + num(summary.draw_rate || 0, 4));
+            text(qualityEl, "elo_delta=" + num(summary.elo_delta || 0, 2) + " | item_control=" + num(summary.item_control || 0, 4));
+            text(metaEl, "map=" + (st.map_id || "-") + " | opp=" + (st.opponent_mode || "-") + "\nmodel=" + (st.model_url || "-"));
+            renderLogs(st.last_matches || []);
+        } catch (err) {
+            text(beatEl, "状态拉取失败：" + (err && err.message ? err.message : err));
+        }
+    }
+
+    pollStatus();
+    refreshFrame();
+    setInterval(pollStatus, STATUS_REFRESH_MS);
+    setInterval(refreshFrame, FRAME_REFRESH_MS);
+})();
+</script>
+</body>
+</html>
