@@ -36,6 +36,48 @@ var bubbleSkinOptionList = [
     { value: "football", label: "足球" },
     { value: "basketball", label: "篮球" }
 ];
+var gameFrameObserverDispatcherBound = false;
+var gameFrameObservers = [];
+var expertDuelFrameLogLimit = 72;
+
+function EnsureGameFrameObserverDispatcher() {
+    var previousOnGameFrame;
+    if (gameFrameObserverDispatcherBound || typeof window === "undefined") {
+        return;
+    }
+    previousOnGameFrame = window.OnGameFrame;
+    window.OnGameFrame = function(game) {
+        if (typeof previousOnGameFrame === "function") {
+            previousOnGameFrame(game);
+        }
+        for (var i = 0; i < gameFrameObservers.length; i++) {
+            try {
+                gameFrameObservers[i](game);
+            }
+            catch (err) {
+                // 观测回调异常不影响主循环
+            }
+        }
+    };
+    gameFrameObserverDispatcherBound = true;
+}
+
+function AddGameFrameObserver(observer) {
+    if (typeof observer !== "function") {
+        return;
+    }
+    EnsureGameFrameObserverDispatcher();
+    if (gameFrameObservers.indexOf(observer) === -1) {
+        gameFrameObservers.push(observer);
+    }
+}
+
+function RemoveGameFrameObserver(observer) {
+    var index = gameFrameObservers.indexOf(observer);
+    if (index !== -1) {
+        gameFrameObservers.splice(index, 1);
+    }
+}
 
 function EnsureMaxMoveStepConfigDom() {
     var panel = document.getElementById("match-panel");
@@ -1025,6 +1067,189 @@ function BuildFighterList(player, monsters) {
     return fighters;
 }
 
+function BuildExpertDuelFighterList(monsters) {
+    var fighters = [];
+    for (var i = 0; i < monsters.length; i++) {
+        fighters.push({
+            id: "expert_ai_" + (i + 1),
+            name: "专家AI " + (i + 1),
+            role: monsters[i].Role,
+            kills: 0,
+            deaths: 0
+        });
+    }
+    return fighters;
+}
+
+function FindFarthestWalkablePointFrom(startPoint) {
+    var bestPoint = null;
+    var bestDistance = -1;
+    var x;
+    var y;
+    var distance;
+    var safeStart = startPoint || { X: 0, Y: 0 };
+    var rows = townBarrierMap ? townBarrierMap.length : 0;
+
+    for (y = 0; y < rows; y++) {
+        if (!townBarrierMap[y]) {
+            continue;
+        }
+        for (x = 0; x < townBarrierMap[y].length; x++) {
+            if (townBarrierMap[y][x] !== 0) {
+                continue;
+            }
+            distance = Math.abs(x - safeStart.X) + Math.abs(y - safeStart.Y);
+            if (distance > bestDistance) {
+                bestDistance = distance;
+                bestPoint = { X: x, Y: y };
+            }
+        }
+    }
+
+    if (!bestPoint && typeof GetCurrentGameMapSpawn === "function") {
+        bestPoint = GetCurrentGameMapSpawn();
+    }
+    return bestPoint || { X: 14, Y: 12 };
+}
+
+function FindMonsterByRole(role) {
+    if (!singlePlayerState || !singlePlayerState.Monsters) {
+        return null;
+    }
+    for (var i = 0; i < singlePlayerState.Monsters.length; i++) {
+        if (singlePlayerState.Monsters[i].Role === role) {
+            return singlePlayerState.Monsters[i];
+        }
+    }
+    return null;
+}
+
+function FormatMapPointText(mapPoint) {
+    if (!mapPoint) {
+        return "--";
+    }
+    return mapPoint.X + "," + mapPoint.Y;
+}
+
+function BuildRoleFrameText(role, fighterName) {
+    var map = role ? role.CurrentMapID() : null;
+    var feet = role && typeof role.GetFootMapIDPair === "function" ? role.GetFootMapIDPair() : null;
+    var monster = FindMonsterByRole(role);
+    var stateTag = monster ? monster.State : "idle";
+    return fighterName
+        + " @(" + FormatMapPointText(map) + ")"
+        + " foot(" + FormatMapPointText(feet ? feet.Left : null) + " | " + FormatMapPointText(feet ? feet.Right : null) + ")"
+        + " unsafeFrames=" + (role ? (role.ExplosionUnsafeFrameCount || 0) : 0)
+        + " trapped=" + (role ? !!role.IsInPaopao : false)
+        + " state=" + stateTag;
+}
+
+function EnsureExpertDuelFramePanel() {
+    var panel = document.getElementById("match-panel");
+    var scoreList = document.getElementById("score-list");
+    var block = document.getElementById("expert-duel-frame-block");
+
+    if (!panel) {
+        return null;
+    }
+    if (!block) {
+        block = document.createElement("div");
+        block.id = "expert-duel-frame-block";
+        block.className = "config-block";
+        block.style.display = "none";
+        block.innerHTML = ""
+            + "<div class=\"config-label\" style=\"font-weight:700;\">专家AI 1v1 逐帧观测</div>"
+            + "<div id=\"expert-duel-frame-head\" class=\"config-hint\" style=\"color:#ffe38b;\"></div>"
+            + "<pre id=\"expert-duel-frame-log\" style=\"margin:6px 0 0 0;padding:8px;border-radius:6px;background:rgba(0,0,0,0.26);color:#d8e6ff;font-size:11px;line-height:1.4;max-height:180px;overflow:auto;white-space:pre-wrap;\"></pre>";
+        if (scoreList && scoreList.parentNode === panel) {
+            panel.insertBefore(block, scoreList);
+        }
+        else {
+            panel.appendChild(block);
+        }
+    }
+    return block;
+}
+
+function SetExpertDuelFramePanelVisible(visible) {
+    var block = EnsureExpertDuelFramePanel();
+    if (!block) {
+        return;
+    }
+    block.style.display = visible ? "block" : "none";
+}
+
+function ResetExpertDuelFrameViewState() {
+    var headNode = document.getElementById("expert-duel-frame-head");
+    var logNode = document.getElementById("expert-duel-frame-log");
+    if (!singlePlayerState) {
+        return;
+    }
+    singlePlayerState.FrameView = {
+        frameCount: 0,
+        startAt: Date.now(),
+        lines: []
+    };
+    if (headNode) {
+        headNode.textContent = "帧 #0";
+    }
+    if (logNode) {
+        logNode.textContent = "";
+    }
+}
+
+function RenderExpertDuelFrameView(game) {
+    var state;
+    var headNode;
+    var logNode;
+    var fighters;
+    var line;
+    var elapsedMs;
+
+    if (!singlePlayerState || singlePlayerState.Mode !== "expert_duel_1v1") {
+        return;
+    }
+
+    EnsureExpertDuelFramePanel();
+    state = singlePlayerState.FrameView;
+    if (!state) {
+        ResetExpertDuelFrameViewState();
+        state = singlePlayerState.FrameView;
+    }
+
+    state.frameCount += 1;
+    elapsedMs = Date.now() - state.startAt;
+    fighters = singlePlayerState.Fighters || [];
+
+    if (fighters.length < 2) {
+        return;
+    }
+
+    line = "#"
+        + state.frameCount
+        + " t=" + (elapsedMs / 1000).toFixed(2) + "s"
+        + " fps=" + (game && typeof game.FPS === "number" ? game.FPS : 0)
+        + "\n"
+        + BuildRoleFrameText(fighters[0].role, fighters[0].name)
+        + "\n"
+        + BuildRoleFrameText(fighters[1].role, fighters[1].name);
+
+    state.lines.push(line);
+    if (state.lines.length > expertDuelFrameLogLimit) {
+        state.lines = state.lines.slice(state.lines.length - expertDuelFrameLogLimit);
+    }
+
+    headNode = document.getElementById("expert-duel-frame-head");
+    logNode = document.getElementById("expert-duel-frame-log");
+    if (headNode) {
+        headNode.textContent = "帧 #" + state.frameCount + "｜用时 " + (elapsedMs / 1000).toFixed(2) + "s";
+    }
+    if (logNode) {
+        logNode.textContent = state.lines.join("\n\n");
+        logNode.scrollTop = logNode.scrollHeight;
+    }
+}
+
 function FindFighterByRole(role) {
     if (!singlePlayerState || !singlePlayerState.Fighters) {
         return null;
@@ -1228,6 +1453,8 @@ function StartSinglePlayerGame(monsterCount) {
 
     monsters = typeof StartMonsters === "function" ? StartMonsters(resolvedMonsterCount) : [];
     fighters = BuildFighterList(player, monsters);
+    RemoveGameFrameObserver(RenderExpertDuelFrameView);
+    SetExpertDuelFramePanelVisible(false);
 
     fighters.forEach(function(unit) {
         unit.role.OnDeath = function(victim, killer) {
@@ -1236,6 +1463,7 @@ function StartSinglePlayerGame(monsterCount) {
     });
 
     singlePlayerState = {
+        Mode: "battle",
         Player: player,
         Monsters: monsters,
         Fighters: fighters,
@@ -1257,6 +1485,79 @@ function StartSinglePlayerGame(monsterCount) {
         RenderMatchPanel();
     }, 1000);
 
+    RenderMatchPanel();
+
+    return singlePlayerState;
+}
+
+function StartExpertDuelGame() {
+    var aiA;
+    var aiB;
+    var roleA;
+    var roleB;
+    var fighters;
+    var spawnA = { X: 0, Y: 0 };
+    var spawnB = { X: 14, Y: 12 };
+
+    if (typeof window !== "undefined" && typeof window.BNBMLRefreshConfig === "function") {
+        window.BNBMLRefreshConfig();
+    }
+
+    if (typeof GetStoredGameMapId === "function" && typeof SetCurrentGameMap === "function") {
+        SetCurrentGameMap(GetStoredGameMapId());
+    }
+
+    InitGame();
+    if (typeof AIEvolution !== "undefined" && typeof AIEvolution.startMatch === "function") {
+        AIEvolution.startMatch();
+    }
+
+    if (typeof GetCurrentGameMapSpawn === "function") {
+        spawnA = GetCurrentGameMapSpawn();
+    }
+    spawnB = FindFarthestWalkablePointFrom(spawnA);
+
+    roleA = CreateRole(1, spawnA.X, spawnA.Y);
+    roleB = CreateRole(2, spawnB.X, spawnB.Y);
+
+    aiA = new Monster(roleA);
+    aiB = new Monster(roleB);
+    aiA.Start();
+    aiB.Start();
+
+    fighters = BuildExpertDuelFighterList([aiA, aiB]);
+    fighters.forEach(function(unit) {
+        unit.role.OnDeath = function(victim, killer) {
+            HandleRoleDeath(victim, killer);
+        };
+    });
+
+    singlePlayerState = {
+        Mode: "expert_duel_1v1",
+        Player: roleA,
+        Monsters: [aiA, aiB],
+        Fighters: fighters,
+        RemainingSeconds: roundDurationSeconds
+    };
+
+    if (roundTimerThread != null) {
+        clearInterval(roundTimerThread);
+    }
+    roundTimerThread = setInterval(function() {
+        if (!gameRunning || !singlePlayerState) {
+            return;
+        }
+        singlePlayerState.RemainingSeconds--;
+        if (singlePlayerState.RemainingSeconds <= 0) {
+            singlePlayerState.RemainingSeconds = 0;
+            EndRoundByTime();
+        }
+        RenderMatchPanel();
+    }, 1000);
+
+    SetExpertDuelFramePanelVisible(true);
+    ResetExpertDuelFrameViewState();
+    AddGameFrameObserver(RenderExpertDuelFrameView);
     RenderMatchPanel();
 
     return singlePlayerState;

@@ -22,6 +22,7 @@ npm start
 
 - 游戏主页: [http://127.0.0.1:4000](http://127.0.0.1:4000)
 - 对战模式示例: [http://127.0.0.1:4000/?mode=battle&ml=1&ml_conf=0.26&ml_move_conf=0.34&ml_margin=0.03&ml_force_move_eta=460&ml_wait_block_eta=760&ml_move_threat_ms=300&ml_model=/output/ml/models/dodge_bc_v1.onnx](http://127.0.0.1:4000/?mode=battle&ml=1&ml_conf=0.26&ml_move_conf=0.34&ml_margin=0.03&ml_force_move_eta=460&ml_wait_block_eta=760&ml_move_threat_ms=300&ml_model=/output/ml/models/dodge_bc_v1.onnx)
+- 专家规则 AI 1v1 实时逐帧观测: [http://127.0.0.1:4000/?mode=expert_duel_1v1](http://127.0.0.1:4000/?mode=expert_duel_1v1)
 
 ### 可选：后台脚本启动
 
