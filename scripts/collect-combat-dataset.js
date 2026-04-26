@@ -6,13 +6,18 @@ const skillPlaywrightPath = path.join(
     process.env.HOME || "",
     ".codex/skills/develop-web-game/node_modules/playwright"
 );
-const { chromium } = require(skillPlaywrightPath);
+let chromium;
+try {
+    ({ chromium } = require(skillPlaywrightPath));
+} catch (_) {
+    ({ chromium } = require("playwright"));
+}
 
 const OUT_ROOT = path.resolve(__dirname, "../output/ml");
 const DATASET_PATH_DEFAULT = path.join(OUT_ROOT, "datasets", "combat_phase0_v1.jsonl");
 const REPORT_PATH_DEFAULT = path.join(OUT_ROOT, "reports", `combat_phase0_collect_${Date.now()}.json`);
 const SCREENSHOT_PATH_DEFAULT = path.join(OUT_ROOT, "reports", "combat_phase0_collect_final.png");
-const URL_BASE = "http://127.0.0.1:4000/?autostart=0&ml=0&ml_collect=1&ml_freeze=1&ml_policy_mode=pure&ml_iql_mix=1";
+const URL_BASE_ROOT = "http://127.0.0.1:4000/?autostart=0";
 
 const TERMINAL_OUTCOME_TAGS = new Set(["win", "loss", "draw", "self_kill"]);
 const ALL_OUTCOME_TAGS = new Set(["ongoing", ...TERMINAL_OUTCOME_TAGS]);
@@ -80,6 +85,38 @@ function clamp01(v) {
     const n = Number(v);
     if (!Number.isFinite(n)) return 0;
     return Math.max(0, Math.min(1, n));
+}
+
+function buildGameUrlBase(cfg) {
+    const params = [
+        "ml=" + (cfg.mlEnabled ? "1" : "0"),
+        "ml_collect=" + (cfg.mlCollect ? "1" : "0"),
+        "ml_freeze=" + (cfg.mlFreeze ? "1" : "0"),
+        "ml_policy_mode=" + encodeURIComponent(String(cfg.mlPolicyMode || "pure")),
+        "ml_iql_mix=" + (cfg.mlIqlMix ? "1" : "0"),
+    ];
+    if (cfg.mlModelUrl) {
+        params.push("ml_model=" + encodeURIComponent(String(cfg.mlModelUrl)));
+    }
+    if (typeof cfg.mlConf === "number") {
+        params.push("ml_conf=" + encodeURIComponent(String(cfg.mlConf)));
+    }
+    if (typeof cfg.mlMoveConf === "number") {
+        params.push("ml_move_conf=" + encodeURIComponent(String(cfg.mlMoveConf)));
+    }
+    if (typeof cfg.mlMargin === "number") {
+        params.push("ml_margin=" + encodeURIComponent(String(cfg.mlMargin)));
+    }
+    if (typeof cfg.mlForceMoveEta === "number") {
+        params.push("ml_force_move_eta=" + encodeURIComponent(String(cfg.mlForceMoveEta)));
+    }
+    if (typeof cfg.mlWaitBlockEta === "number") {
+        params.push("ml_wait_block_eta=" + encodeURIComponent(String(cfg.mlWaitBlockEta)));
+    }
+    if (typeof cfg.mlMoveThreatMs === "number") {
+        params.push("ml_move_threat_ms=" + encodeURIComponent(String(cfg.mlMoveThreatMs)));
+    }
+    return URL_BASE_ROOT + "&" + params.join("&");
 }
 
 function getStateVector(row) {
@@ -677,6 +714,39 @@ async function main() {
     const itemSafeRadiusJitter = Math.max(0, Math.min(3, asFloat(getArg("item-safe-radius-jitter", "1"), 1)));
     const itemMax = Math.max(0, asPositiveInt(getArg("item-max", "22"), 22));
     const opponentThinkJitterRatio = Math.max(0, Math.min(0.8, asFloat(getArg("opponent-think-jitter-ratio", "0.3"), 0.3)));
+    const mlEnabled = getArg("ml-enabled", "0") !== "0";
+    const mlCollect = getArg("ml-collect", "1") !== "0";
+    const mlFreeze = getArg("ml-freeze", "1") !== "0";
+    const mlPolicyMode = String(getArg("ml-policy-mode", "pure") || "pure").trim() || "pure";
+    const mlIqlMix = getArg("ml-iql-mix", "1") !== "0";
+    const mlModelUrlRaw = String(getArg("ml-model-url", "") || "").trim();
+    const mlModelUrl = mlModelUrlRaw ? mlModelUrlRaw : "";
+    const mlConfRaw = String(getArg("ml-conf", "") || "").trim();
+    const mlMoveConfRaw = String(getArg("ml-move-conf", "") || "").trim();
+    const mlMarginRaw = String(getArg("ml-margin", "") || "").trim();
+    const mlForceMoveEtaRaw = String(getArg("ml-force-move-eta", "") || "").trim();
+    const mlWaitBlockEtaRaw = String(getArg("ml-wait-block-eta", "") || "").trim();
+    const mlMoveThreatMsRaw = String(getArg("ml-move-threat-ms", "") || "").trim();
+    const mlConf = mlConfRaw === "" ? null : Number(mlConfRaw);
+    const mlMoveConf = mlMoveConfRaw === "" ? null : Number(mlMoveConfRaw);
+    const mlMargin = mlMarginRaw === "" ? null : Number(mlMarginRaw);
+    const mlForceMoveEta = mlForceMoveEtaRaw === "" ? null : Number(mlForceMoveEtaRaw);
+    const mlWaitBlockEta = mlWaitBlockEtaRaw === "" ? null : Number(mlWaitBlockEtaRaw);
+    const mlMoveThreatMs = mlMoveThreatMsRaw === "" ? null : Number(mlMoveThreatMsRaw);
+    const gameUrlBase = buildGameUrlBase({
+        mlEnabled,
+        mlCollect,
+        mlFreeze,
+        mlPolicyMode,
+        mlIqlMix,
+        mlModelUrl,
+        mlConf: Number.isFinite(mlConf) ? mlConf : null,
+        mlMoveConf: Number.isFinite(mlMoveConf) ? mlMoveConf : null,
+        mlMargin: Number.isFinite(mlMargin) ? mlMargin : null,
+        mlForceMoveEta: Number.isFinite(mlForceMoveEta) ? mlForceMoveEta : null,
+        mlWaitBlockEta: Number.isFinite(mlWaitBlockEta) ? mlWaitBlockEta : null,
+        mlMoveThreatMs: Number.isFinite(mlMoveThreatMs) ? mlMoveThreatMs : null,
+    });
 
     const runtimeMatchDurationSec = specialBombEscape ? specialRoundSec : matchDurationSec;
     const runtimeSuddenDeath = specialBombEscape ? false : suddenDeath;
@@ -987,6 +1057,26 @@ async function main() {
         return false;
     }
 
+    function hasEpisodeDangerSignal(rows) {
+        if (!Array.isArray(rows) || rows.length <= 0) {
+            return false;
+        }
+        for (const row of rows) {
+            if (!row) continue;
+            const meta = row.meta || {};
+            const aux = row.aux_labels || {};
+            const activeBombs = Number(meta.activeBombs || 0);
+            const eta = Number(meta.eta);
+            const riskLabel = Number(row.risk_label || 0);
+            const bombSelfTrapRisk = Number(aux.bomb_self_trap_risk || 0);
+            if (activeBombs > 0) return true;
+            if (Number.isFinite(eta) && eta > 0) return true;
+            if (row.pre_death || riskLabel >= 1) return true;
+            if (Number.isFinite(bombSelfTrapRisk) && bombSelfTrapRisk >= 0.25) return true;
+        }
+        return false;
+    }
+
     function commitEpisodeRows(episodeId, terminalMeta) {
         const key = String(episodeId || "runtime");
         const rows = episodeBuffers.get(key) || [];
@@ -998,7 +1088,14 @@ async function main() {
 
         const meta = terminalMeta || {};
         const terminalReason = String(meta.terminal_reason || "").trim().toLowerCase();
-        const discardEpisode = !!meta.discard_episode;
+        let discardEpisode = !!meta.discard_episode;
+        if (terminalReason === "enemy_self_kill_discard") {
+            discardEpisode = false;
+        }
+        const stallHasDangerSignal = terminalReason === "stall_abort" ? hasEpisodeDangerSignal(rows) : false;
+        if (terminalReason === "stall_abort") {
+            discardEpisode = !stallHasDangerSignal;
+        }
         if (TERMINAL_REASON_TAGS.has(terminalReason)) {
             terminalReasonHist[terminalReason] = (terminalReasonHist[terminalReason] || 0) + 1;
         }
@@ -1016,7 +1113,11 @@ async function main() {
 
         if (discardEpisode) {
             discardedEpisodeCount += 1;
-            markDrop("discard_episode_" + (terminalReason || "unknown"));
+            if (terminalReason === "stall_abort" && !stallHasDangerSignal) {
+                markDrop("discard_episode_stall_abort_safe_idle");
+            } else {
+                markDrop("discard_episode_" + (terminalReason || "unknown"));
+            }
         }
 
         if (!discardEpisode) {
@@ -1057,7 +1158,7 @@ async function main() {
     }
 
     try {
-        await page.goto(URL_BASE, { waitUntil: "domcontentloaded" });
+        await page.goto(gameUrlBase, { waitUntil: "domcontentloaded" });
         await page.waitForTimeout(250);
 
         await page.evaluate((cfg) => {
@@ -2385,7 +2486,7 @@ async function main() {
                     const aiThreatRecent = Number(meta.lastAiThreatTs || 0) > 0 && (Date.now() - Number(meta.lastAiThreatTs || 0)) <= 2600;
                     if (window.__combatCollect.ignoreEnemySelfKill && !aiThreatRecent && Number(meta.myBombThreatScore || 0) < 0.20) {
                         terminalReason = "enemy_self_kill_discard";
-                        discardEpisode = true;
+                        discardEpisode = false;
                         outcomeTag = "draw";
                         reward = 0;
                         mirrorOutcomeTag = "self_kill";
@@ -3009,6 +3110,19 @@ async function main() {
         opponent_pool: opponentPool,
         agent_pool: agentPool,
         agent_expert_duel: agentExpertDuel,
+        game_url_base: gameUrlBase,
+        ml_enabled: mlEnabled,
+        ml_collect: mlCollect,
+        ml_freeze: mlFreeze,
+        ml_policy_mode: mlPolicyMode,
+        ml_iql_mix: mlIqlMix,
+        ml_model_url: mlModelUrl || null,
+        ml_conf: Number.isFinite(mlConf) ? mlConf : null,
+        ml_move_conf: Number.isFinite(mlMoveConf) ? mlMoveConf : null,
+        ml_margin: Number.isFinite(mlMargin) ? mlMargin : null,
+        ml_force_move_eta: Number.isFinite(mlForceMoveEta) ? mlForceMoveEta : null,
+        ml_wait_block_eta: Number.isFinite(mlWaitBlockEta) ? mlWaitBlockEta : null,
+        ml_move_threat_ms: Number.isFinite(mlMoveThreatMs) ? mlMoveThreatMs : null,
         clear_nonrigid: runtimeClearNonRigid,
         random_item_density: randomItemDensity,
         random_item_density_jitter: runtimeRandomItemDensityJitter,

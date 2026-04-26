@@ -1918,7 +1918,8 @@ var BNBMLDatasetCollector = {
         if (typeof AIDodgeTrainer !== "undefined"
             && AIDodgeTrainer
             && typeof AIDodgeTrainer.IsMonsterTraining === "function"
-            && !AIDodgeTrainer.IsMonsterTraining(monster)) {
+            && !AIDodgeTrainer.IsMonsterTraining(monster)
+            && !finalOpts.allowNonTraining) {
             return;
         }
 
@@ -5116,6 +5117,16 @@ Monster.prototype.Think = function() {
         && Array.isArray(threatSnapshot.eventSnapshot.activeWindows)
         && threatSnapshot.eventSnapshot.activeWindows.length > 0
     );
+    if (BNBMLDatasetCollector
+        && typeof BNBMLDatasetCollector.RecordFrame === "function"
+        && typeof BNBMLDatasetCollector.ShouldCollect === "function"
+        && BNBMLDatasetCollector.ShouldCollect()) {
+        BNBMLDatasetCollector.RecordFrame(this, currentMap, threatSnapshot, {
+            policyTag: "phase1_runtime",
+            noMixSampling: true,
+            allowNonTraining: true
+        });
+    }
 
     // 已到达目标 → 清除，允许重新选择
     if (this.LastTargetKey === currentKey) {
@@ -5224,6 +5235,17 @@ Monster.prototype.Think = function() {
 
     mlDecision = this.TryOfflineMLDodgeAction(currentMap, threatSnapshot, "battle");
     if (mlDecision && mlDecision.handled) {
+        if (BNBMLDatasetCollector
+            && typeof BNBMLDatasetCollector.RecordFrame === "function"
+            && typeof BNBMLDatasetCollector.ShouldCollect === "function"
+            && BNBMLDatasetCollector.ShouldCollect()) {
+            BNBMLDatasetCollector.RecordFrame(this, currentMap, threatSnapshot, {
+                actionOverride: typeof mlDecision.action === "number" ? mlDecision.action : 0,
+                policyTag: "phase1_model",
+                noMixSampling: true,
+                allowNonTraining: true
+            });
+        }
         return;
     }
 

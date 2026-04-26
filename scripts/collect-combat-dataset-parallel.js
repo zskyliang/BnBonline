@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 const crypto = require("crypto");
 const fs = require("fs");
+const os = require("os");
 const path = require("path");
 const readline = require("readline");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 
 const ROOT = path.resolve(__dirname, "..");
 const COLLECT_SCRIPT = path.resolve(__dirname, "collect-combat-dataset.js");
@@ -474,6 +475,50 @@ function countLinesSync(filePath) {
     return count;
 }
 
+function getCpuTotalsSnapshot() {
+    const cpus = os.cpus();
+    let idle = 0;
+    let total = 0;
+    for (const cpu of cpus) {
+        const times = cpu && cpu.times ? cpu.times : {};
+        const user = Number(times.user) || 0;
+        const nice = Number(times.nice) || 0;
+        const sys = Number(times.sys) || 0;
+        const irq = Number(times.irq) || 0;
+        const cpuIdle = Number(times.idle) || 0;
+        idle += cpuIdle;
+        total += user + nice + sys + irq + cpuIdle;
+    }
+    return { idle, total };
+}
+
+function createCpuUsageSampler() {
+    let prev = getCpuTotalsSnapshot();
+    return function sampleCpuPercent() {
+        const cur = getCpuTotalsSnapshot();
+        const totalDiff = cur.total - prev.total;
+        const idleDiff = cur.idle - prev.idle;
+        prev = cur;
+        if (!Number.isFinite(totalDiff) || totalDiff <= 0) return null;
+        const usage = (1 - (idleDiff / totalDiff)) * 100;
+        return Number.isFinite(usage) ? Math.max(0, Math.min(100, usage)) : null;
+    };
+}
+
+function setWindowsProcessSuspended(pid, suspended) {
+    if (process.platform !== "win32") return false;
+    const n = Number(pid);
+    if (!Number.isFinite(n) || n <= 0) return false;
+    const cmd = suspended
+        ? `Suspend-Process -Id ${n} -ErrorAction Stop`
+        : `Resume-Process -Id ${n} -ErrorAction Stop`;
+    const result = spawnSync("powershell", ["-NoProfile", "-Command", cmd], {
+        cwd: ROOT,
+        stdio: "ignore",
+    });
+    return result && result.status === 0;
+}
+
 function spawnWorker(workerIndex, args, logPrefix) {
     return new Promise((resolve) => {
         const child = spawn(process.execPath, args, {
@@ -762,7 +807,7 @@ function readJsonMaybe(filePath) {
 
 async function main() {
     const startedAt = Date.now();
-    const workers = asPositiveInt(getArg("workers", "10"), 10);
+    const workers = asPositiveInt(getArg("workers", "1"), 1);
     const targetFrames = asPositiveInt(getArg("target-frames", "200000"), 200000);
     const oversampleRatio = Math.max(1.0, asFloat(getArg("oversample-ratio", "1.35"), 1.35));
     const maxWallSec = asPositiveInt(getArg("max-wall-sec", "7200"), 7200);
@@ -824,6 +869,18 @@ async function main() {
     const itemSafeRadiusJitter = getArg("item-safe-radius-jitter", "1");
     const itemMax = getArg("item-max", "24");
     const opponentThinkJitterRatio = getArg("opponent-think-jitter-ratio", "0.3");
+    const mlEnabled = getArg("ml-enabled", "0");
+    const mlCollect = getArg("ml-collect", "1");
+    const mlFreeze = getArg("ml-freeze", "1");
+    const mlPolicyMode = getArg("ml-policy-mode", "pure");
+    const mlIqlMix = getArg("ml-iql-mix", "1");
+    const mlModelUrl = getArg("ml-model-url", "");
+    const mlConf = getArg("ml-conf", "");
+    const mlMoveConf = getArg("ml-move-conf", "");
+    const mlMargin = getArg("ml-margin", "");
+    const mlForceMoveEta = getArg("ml-force-move-eta", "");
+    const mlWaitBlockEta = getArg("ml-wait-block-eta", "");
+    const mlMoveThreatMs = getArg("ml-move-threat-ms", "");
     const opponentPool = getArg(
         "opponent-pool",
         getArg("opponents", "heuristic_v1,heuristic_v2,aggressive_trapper,coward_runner,item_rusher,randomized_mistake_bot")
@@ -834,6 +891,10 @@ async function main() {
     const nearDupWindowMs = asPositiveInt(getArg("near-dup-window-ms", "700"), 700);
     const nearDupBurstLimit = asPositiveInt(getArg("near-dup-burst-limit", "8"), 8);
     const minFinalRatio = Math.max(0, Math.min(1, asFloat(getArg("min-final-ratio", "0.98"), 0.98)));
+    const cpuCapPercent = clampRange(asFloat(getArg("cpu-cap-percent", "70"), 70), 5, 100);
+    const cpuControlMs = asPositiveInt(getArg("cpu-control-ms", "2500"), 2500);
+    const cpuResumeHysteresis = clampRange(asFloat(getArg("cpu-resume-hysteresis", "8"), 8), 1, 30);
+    const cpuControlEnabled = process.platform === "win32" && cpuCapPercent < 99.9;
 
     const fresh = getArg("fresh", "1") !== "0";
 
@@ -857,6 +918,7 @@ async function main() {
     const partReports = [];
     const workerTasks = [];
     const workerProcs = [];
+    const collectorControls = [];
 
     const offlineMicroTarget = offlineMicro
         ? Math.max(0, Math.min(
@@ -924,6 +986,18 @@ async function main() {
             `--item-safe-radius=${itemSafeRadius}`,
             `--item-safe-radius-jitter=${itemSafeRadiusJitter}`,
             `--item-max=${itemMax}`,
+            `--ml-enabled=${mlEnabled}`,
+            `--ml-collect=${mlCollect}`,
+            `--ml-freeze=${mlFreeze}`,
+            `--ml-policy-mode=${mlPolicyMode}`,
+            `--ml-iql-mix=${mlIqlMix}`,
+            `--ml-model-url=${mlModelUrl}`,
+            `--ml-conf=${mlConf}`,
+            `--ml-move-conf=${mlMoveConf}`,
+            `--ml-margin=${mlMargin}`,
+            `--ml-force-move-eta=${mlForceMoveEta}`,
+            `--ml-wait-block-eta=${mlWaitBlockEta}`,
+            `--ml-move-threat-ms=${mlMoveThreatMs}`,
             `--opponent-think-jitter-ratio=${opponentThinkJitterRatio}`,
             `--opponent-pool=${opponentPool}`,
             `--agent-pool=${agentPool}`,
@@ -971,6 +1045,11 @@ async function main() {
 
         const info = await spawnWorker(i, args, `[collector-${i}]`);
         workerProcs.push(info.child);
+        collectorControls.push({
+            workerIndex: i,
+            child: info.child,
+            paused: false,
+        });
         workerTasks.push(waitChild(info));
     }
 
@@ -979,13 +1058,36 @@ async function main() {
     let targetStopTriggered = false;
     let hardStopTimer = null;
     let targetStopTimer = null;
+    let cpuControlTimer = null;
     let killEscalationTimer = null;
+    let cpuUsageSampleCount = 0;
+    let cpuUsageSampleSum = 0;
+    let cpuUsageMax = 0;
+    let cpuThrottleEvents = 0;
+    let cpuResumeEvents = 0;
+    let cpuControlErrors = 0;
+    const sampleCpuUsage = createCpuUsageSampler();
+
+    function resumeAllPausedCollectors() {
+        for (const ctl of collectorControls) {
+            if (!ctl || !ctl.paused || !ctl.child || ctl.child.exitCode != null) {
+                continue;
+            }
+            if (setWindowsProcessSuspended(ctl.child.pid, false)) {
+                ctl.paused = false;
+            } else {
+                cpuControlErrors += 1;
+            }
+        }
+    }
+
     function stopWorkers(reason) {
         if (reason === "target") {
             targetStopTriggered = true;
         } else {
             hardStopped = true;
         }
+        resumeAllPausedCollectors();
         for (const p of workerProcs) {
             if (p && p.exitCode == null && !p.killed) {
                 try {
@@ -1021,6 +1123,47 @@ async function main() {
         }
     }, 2500);
 
+    if (cpuControlEnabled && collectorControls.length > 0) {
+        cpuControlTimer = setInterval(() => {
+            const usage = sampleCpuUsage();
+            if (!Number.isFinite(usage)) {
+                return;
+            }
+            cpuUsageSampleCount += 1;
+            cpuUsageSampleSum += usage;
+            cpuUsageMax = Math.max(cpuUsageMax, usage);
+
+            const runningCollectors = collectorControls.filter((ctl) => ctl && ctl.child && ctl.child.exitCode == null);
+            if (runningCollectors.length <= 0) {
+                return;
+            }
+            const activeCollectors = runningCollectors.filter((ctl) => !ctl.paused);
+            const pausedCollectors = runningCollectors.filter((ctl) => !!ctl.paused);
+            const resumeThreshold = Math.max(0, cpuCapPercent - cpuResumeHysteresis);
+
+            if (usage > cpuCapPercent && activeCollectors.length > 0) {
+                const target = activeCollectors[activeCollectors.length - 1];
+                if (setWindowsProcessSuspended(target.child.pid, true)) {
+                    target.paused = true;
+                    cpuThrottleEvents += 1;
+                } else {
+                    cpuControlErrors += 1;
+                }
+                return;
+            }
+
+            if (usage <= resumeThreshold && pausedCollectors.length > 0) {
+                const target = pausedCollectors[0];
+                if (setWindowsProcessSuspended(target.child.pid, false)) {
+                    target.paused = false;
+                    cpuResumeEvents += 1;
+                } else {
+                    cpuControlErrors += 1;
+                }
+            }
+        }, cpuControlMs);
+    }
+
     const workerExit = await Promise.all(workerTasks);
     if (hardStopTimer) {
         clearTimeout(hardStopTimer);
@@ -1028,6 +1171,10 @@ async function main() {
     if (targetStopTimer) {
         clearInterval(targetStopTimer);
     }
+    if (cpuControlTimer) {
+        clearInterval(cpuControlTimer);
+    }
+    resumeAllPausedCollectors();
     if (killEscalationTimer) {
         clearTimeout(killEscalationTimer);
     }
@@ -1079,7 +1226,13 @@ async function main() {
     const rowsWritten = mergeStats.rows_written || 0;
     const doneRatio = rowsWritten > 0 ? doneWritten / rowsWritten : 0;
     const minRequiredRows = Math.max(1, Math.floor(targetFrames * minFinalRatio));
-    const workerFailureCount = workerExit.filter((x) => (x && (x.code !== 0 || !!x.signal))).length;
+    const isExpectedStopSignal = (sig) => sig === "SIGTERM" || sig === "SIGKILL";
+    const workerFailureCount = workerExit.filter((x) => {
+        if (!x) return true;
+        if (x.code === 0 && !x.signal) return false;
+        if (targetStopTriggered && isExpectedStopSignal(x.signal)) return false;
+        return true;
+    }).length;
     const collectionComplete = rowsWritten >= minRequiredRows;
 
     const report = {
@@ -1111,6 +1264,16 @@ async function main() {
         near_dup_burst_limit: nearDupBurstLimit,
         min_final_ratio: minFinalRatio,
         min_required_rows: minRequiredRows,
+        cpu_cap_percent: Number(cpuCapPercent),
+        cpu_control_ms: Number(cpuControlMs),
+        cpu_resume_hysteresis: Number(cpuResumeHysteresis),
+        cpu_control_enabled: cpuControlEnabled,
+        cpu_usage_avg_percent: cpuUsageSampleCount > 0 ? (cpuUsageSampleSum / cpuUsageSampleCount) : null,
+        cpu_usage_max_percent: cpuUsageSampleCount > 0 ? cpuUsageMax : null,
+        cpu_usage_sample_count: cpuUsageSampleCount,
+        cpu_throttle_events: cpuThrottleEvents,
+        cpu_resume_events: cpuResumeEvents,
+        cpu_control_errors: cpuControlErrors,
         collection_complete: collectionComplete,
         worker_failure_count: workerFailureCount,
         soft_obstacle_reinject_ratio: Number(softObstacleReinjectRatio),
@@ -1158,6 +1321,18 @@ async function main() {
         item_safe_radius: Number(itemSafeRadius),
         item_safe_radius_jitter: Number(itemSafeRadiusJitter),
         item_max: Number(itemMax),
+        ml_enabled: String(mlEnabled) !== "0",
+        ml_collect: String(mlCollect) !== "0",
+        ml_freeze: String(mlFreeze) !== "0",
+        ml_policy_mode: String(mlPolicyMode || "pure"),
+        ml_iql_mix: String(mlIqlMix) !== "0",
+        ml_model_url: String(mlModelUrl || ""),
+        ml_conf: mlConf === "" ? null : Number(mlConf),
+        ml_move_conf: mlMoveConf === "" ? null : Number(mlMoveConf),
+        ml_margin: mlMargin === "" ? null : Number(mlMargin),
+        ml_force_move_eta: mlForceMoveEta === "" ? null : Number(mlForceMoveEta),
+        ml_wait_block_eta: mlWaitBlockEta === "" ? null : Number(mlWaitBlockEta),
+        ml_move_threat_ms: mlMoveThreatMs === "" ? null : Number(mlMoveThreatMs),
         opponent_think_jitter_ratio: Number(opponentThinkJitterRatio),
         opponent_pool: String(opponentPool).split(",").map((s) => s.trim()).filter(Boolean),
         agent_pool: String(agentPool).split(",").map((s) => s.trim()).filter(Boolean),

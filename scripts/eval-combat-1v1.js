@@ -5,7 +5,12 @@ const skillPlaywrightPath = path.join(
     process.env.HOME || "",
     ".codex/skills/develop-web-game/node_modules/playwright"
 );
-const { chromium } = require(skillPlaywrightPath);
+let chromium;
+try {
+    ({ chromium } = require(skillPlaywrightPath));
+} catch (_) {
+    ({ chromium } = require("playwright"));
+}
 
 const OUT_DIR = path.resolve(__dirname, "../output/ml/reports");
 const REPORT_PATH_DEFAULT = path.join(OUT_DIR, `combat_phase0_eval_${Date.now()}.json`);

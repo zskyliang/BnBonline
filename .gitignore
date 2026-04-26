@@ -108,9 +108,11 @@ jspm_packages
 # Optional REPL history
 .node_repl_history
 
-output/ml/reports/*
-output/ml/datasets/*
-output/web-game/*
+output/*
+# output/ml/reports/*
+# output/ml/datasets/*
+# output/web-game/*
+# output/specialized/*
 
 ### Python cache ###
 __pycache__/

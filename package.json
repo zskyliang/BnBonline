@@ -15,6 +15,7 @@
     "train:iql": "python3 ml/train_iql.py --dataset output/ml/datasets/dodge_iql_v1_mixed_200k.jsonl --out-pt output/ml/models/dodge_iql_v1.pt --out-onnx output/ml/models/dodge_iql_v1.onnx --out-metrics output/ml/reports/iql_v1_metrics.json",
     "train:iql:iterative": "node scripts/train-iql-iterative.js",
     "train:combat:phase0": "node scripts/train-combat-phase0-incremental.js",
+    "train:combat:phase1": "node scripts/train-combat-phase1-ppo.js",
     "sprint:99": "node scripts/run-99-sprint.js"
   },
   "author": "SineYuan",
@@ -22,6 +23,7 @@
   "dependencies": {
     "body-parser": "^1.14.2",
     "express": "^4.13.4",
+    "playwright": "^1.59.1",
     "socket.io": "^1.4.5",
     "swig": "^1.4.2"
   },
