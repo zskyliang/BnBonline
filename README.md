@@ -1,102 +1,46 @@
-# BnBonline
+# BnBonline Godot
 
-H5 泡泡堂在线对战版，使用 Node.js + Express + Socket.IO 搭建服务端，前端修改自 [Visolleon/bnb](https://github.com/Visolleon/bnb)。
+基于 Godot 4.6 重写的泡泡堂风格本地对战游戏。项目使用纯 GDScript，启动后直接进入玩家对规则 AI 的五分钟比赛。
 
-详细启动文档请看：[docs/GAME_STARTUP.md](docs/GAME_STARTUP.md)
+## 运行
 
-## 1. 本地启动（Node 方式）
-
-### 前置要求
-
-- Node.js 18+（推荐 20）
-- npm
-
-### 启动步骤
+需要 Godot 4.6 或兼容的 Godot 4.x 版本：
 
 ```bash
-npm install
-npm start
+godot --path .
 ```
 
-默认访问地址：
-
-- 游戏主页: [http://127.0.0.1:4000](http://127.0.0.1:4000)
-- 对战模式示例: [http://127.0.0.1:4000/?mode=battle&ml=1&ml_conf=0.26&ml_move_conf=0.34&ml_margin=0.03&ml_force_move_eta=460&ml_wait_block_eta=760&ml_move_threat_ms=300&ml_model=/output/ml/models/dodge_bc_v1.onnx](http://127.0.0.1:4000/?mode=battle&ml=1&ml_conf=0.26&ml_move_conf=0.34&ml_margin=0.03&ml_force_move_eta=460&ml_wait_block_eta=760&ml_move_threat_ms=300&ml_model=/output/ml/models/dodge_bc_v1.onnx)
-- 专家规则 AI 1v1 实时逐帧观测: [http://127.0.0.1:4000/?mode=expert_duel_1v1](http://127.0.0.1:4000/?mode=expert_duel_1v1)
-
-### 可选：后台脚本启动
-
-项目已提供脚本：
+打开编辑器：
 
 ```bash
-./public/game/start-game.sh
-./public/game/restart-game.sh
+godot --editor --path .
 ```
 
-适合本地开发时快速重启服务。
+## 操作
 
-## 2. Docker 一键部署（推荐移植）
+- 方向键或 `WASD`：移动
+- 空格：放置水泡
+- 数字 `1`：被困泡时自救
+- `Esc`：暂停或继续
 
-### 前置要求
+右侧面板可以调整地图、AI 数量、角色速度/泡泡数/威力上限和玩家泡泡皮肤。地图或 AI 数量改变后会立即重开本局，其他设置即时生效并保存到 `user://settings.cfg`。
 
-- Docker
-- Docker Compose（Docker Desktop 内置）
+## 游戏内容
 
-### 一键启动
+- 经典地图与风车爱心地图
+- 0～4 名使用 `AStarGrid2D` 寻路的规则 AI
+- 泡泡连锁爆炸、箱子破坏和泡泡数/速度/威力强化
+- 半身安全、连续两帧命中、困泡、自救、接触击杀与复活规则
+- 五分钟计时、击杀排行、胜利与平局结算
 
-在项目根目录执行：
+详细规则见 [docs/GAME_RULES.md](docs/GAME_RULES.md)。
+
+## 验证
 
 ```bash
-docker compose up -d --build
+godot --headless --path . --import --quit
+godot --headless --path . --script res://tests/test_runner.gd
+godot --headless --path . --script res://tests/smoke_runner.gd -- --mute
 ```
 
-然后访问：
-
-- [http://127.0.0.1:4000](http://127.0.0.1:4000)
-
-### 常用命令
-
-```bash
-# 查看日志
-docker compose logs -f
-
-# 停止并删除容器
-docker compose down
-
-# 仅重启服务（不重建镜像）
-docker compose restart
-```
-
-### 端口说明
-
-- 容器内部端口固定为 `4000`
-- 宿主机端口默认 `4000`
-- 如需改宿主机端口，可在启动时指定环境变量：
-
-```bash
-PORT=8080 docker compose up -d --build
-```
-
-此时访问：
-
-- [http://127.0.0.1:8080](http://127.0.0.1:8080)
-
-### 数据持久化
-
-`docker-compose.yml` 已把宿主机 `./output` 挂载到容器 `/app/output`，训练输出和中间文件可在主机侧保留，容器重建后不会丢失。
-
-## 3. 移植到新机器启动
-
-在新机器上执行：
-
-```bash
-git clone https://github.com/SineYuan/BnBonline.git
-cd BnBonline
-docker compose up -d --build
-```
-
-完成后直接访问浏览器即可。
-
-## 4. 已知问题
-
-网络延迟会导致双方游戏不同步。
+项目结构采用组合场景：比赛控制器负责流程，地图、角色、泡泡、爆炸、AI 和 HUD 各自维护单一职责，并通过类型化信号通信。

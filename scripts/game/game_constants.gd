@@ -1,0 +1,45 @@
+class_name GameConstants
+extends RefCounted
+## Shared gameplay constants and grid conversion helpers.
+
+const GRID_COLUMNS: int = 15
+const GRID_ROWS: int = 13
+const CELL_SIZE: float = 40.0
+const GRID_ORIGIN: Vector2 = Vector2(20.0, 40.0)
+const GAME_VIEW_SIZE: Vector2 = Vector2(800.0, 600.0)
+
+const INITIAL_SPEED: float = 150.0
+const INITIAL_BUBBLES: int = 2
+const INITIAL_POWER: int = 2
+const BUBBLE_FUSE_SECONDS: float = 3.0
+const EXPLOSION_SECONDS: float = 0.45
+const TRAP_SECONDS: float = 3.0
+const RESPAWN_SECONDS: float = 2.4
+const RESPAWN_INVINCIBLE_SECONDS: float = 1.0
+const ROUND_SECONDS: float = 300.0
+const AI_THINK_SECONDS: float = 0.15
+
+const ITEM_BUBBLE: int = 101
+const ITEM_SPEED: int = 102
+const ITEM_POWER: int = 103
+
+static func grid_to_world(cell: Vector2i) -> Vector2:
+	return GRID_ORIGIN + Vector2(cell) * CELL_SIZE + Vector2.ONE * CELL_SIZE * 0.5
+
+static func grid_to_top_left(cell: Vector2i) -> Vector2:
+	return GRID_ORIGIN + Vector2(cell) * CELL_SIZE
+
+static func world_to_grid(world_position: Vector2) -> Vector2i:
+	var local_position: Vector2 = world_position - GRID_ORIGIN
+	return Vector2i(floori(local_position.x / CELL_SIZE), floori(local_position.y / CELL_SIZE))
+
+static func is_inside(cell: Vector2i) -> bool:
+	return cell.x >= 0 and cell.y >= 0 and cell.x < GRID_COLUMNS and cell.y < GRID_ROWS
+
+static func is_actor_center_inside_arena(world_position: Vector2) -> bool:
+	var first_center: Vector2 = grid_to_world(Vector2i.ZERO)
+	var last_center: Vector2 = grid_to_world(Vector2i(GRID_COLUMNS - 1, GRID_ROWS - 1))
+	return world_position.x >= first_center.x \
+		and world_position.x <= last_center.x \
+		and world_position.y >= first_center.y \
+		and world_position.y <= last_center.y
