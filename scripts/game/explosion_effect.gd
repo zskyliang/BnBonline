@@ -47,6 +47,9 @@ func _process(delta: float) -> void:
 func contains(cell: Vector2i) -> bool:
 	return unsafe_lookup.has(cell)
 
+func milliseconds_remaining() -> int:
+	return maxi(0, ceili((GameConstants.EXPLOSION_SECONDS - _elapsed) * 1000.0))
+
 func _initial_region(cell: Vector2i) -> Rect2:
 	if cell == center_cell:
 		return Rect2(0, 160, 40, 40)

@@ -18,7 +18,9 @@ var _player: GameActor
 var _remaining_seconds: float = GameConstants.ROUND_SECONDS
 var _round_over: bool = false
 var _is_paused: bool = false
+var _simulation_time_ms: float = 0.0
 var _rng := RandomNumberGenerator.new()
+var _ai_item_claims: Dictionary = {}
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -32,6 +34,7 @@ func _ready() -> void:
 func _physics_process(delta: float) -> void:
 	if _round_over or _is_paused:
 		return
+	_simulation_time_ms += delta * 1000.0
 	_remaining_seconds = maxf(0.0, _remaining_seconds - delta)
 	hud.update_timer(_remaining_seconds)
 	_arena_timer_label.text = _format_time(_remaining_seconds)
@@ -53,6 +56,7 @@ func start_match() -> void:
 	_is_paused = false
 	_round_over = false
 	_remaining_seconds = GameConstants.ROUND_SECONDS
+	_simulation_time_ms = 0.0
 	_clear_match_nodes()
 	board.reset(MapCatalog.get_map(settings.map_id))
 	_spawn_fighters()
@@ -66,17 +70,70 @@ func start_match() -> void:
 	_audio_call(&"play_music")
 
 func danger_eta_ms(cell: Vector2i) -> int:
-	for effect: ExplosionEffect in _active_explosions:
-		if is_instance_valid(effect) and effect.contains(cell):
-			return 0
-	var best: int = 999999
+	return build_ai_forecast().danger_eta_ms(cell)
+
+func build_ai_snapshot() -> AIBattleSnapshot:
+	var snapshot := AIBattleSnapshot.new()
+	snapshot.cells = MapCatalog.clone_matrix(board.cells)
+	var serial: int = 0
 	for value: Variant in board.bombs.values():
 		var bubble: GameBubble = value as GameBubble
 		if not is_instance_valid(bubble) or bubble.has_exploded:
 			continue
-		if cell in board.predicted_blast(bubble.cell, bubble.power):
-			best = mini(best, bubble.milliseconds_until_explosion())
-	return best
+		var owner_id: int = 0
+		if is_instance_valid(bubble.bubble_owner):
+			owner_id = bubble.bubble_owner.get_instance_id()
+		snapshot.bombs.append(AIBattleSnapshot.BombState.new(
+			bubble.cell, bubble.power, bubble.milliseconds_until_explosion(), owner_id, serial
+		))
+		serial += 1
+	for effect: ExplosionEffect in _active_explosions:
+		if is_instance_valid(effect):
+			snapshot.explosions.append(AIBattleSnapshot.ExplosionState.new(
+				effect.cells, effect.milliseconds_remaining()
+			))
+	for battle_actor: GameActor in _actors:
+		if not is_instance_valid(battle_actor):
+			continue
+		snapshot.actors.append(AIBattleSnapshot.ActorState.new(
+			battle_actor.get_instance_id(),
+			battle_actor.team_id,
+			battle_actor.current_cell(),
+			battle_actor.position,
+			battle_actor.stats.move_speed,
+			battle_actor.stats.bubble_capacity,
+			battle_actor.stats.active_bubbles,
+			battle_actor.stats.power,
+			battle_actor.stats.is_dead,
+			battle_actor.stats.is_trapped,
+			battle_actor.is_player
+		))
+	snapshot.item_cells = board.get_item_cells()
+	return snapshot
+
+func build_ai_forecast(horizon_ms: int = 5000) -> AIHazardForecast:
+	return AIHazardForecast.build(build_ai_snapshot(), horizon_ms)
+
+func get_simulation_time_ms() -> int:
+	return int(_simulation_time_ms)
+
+func claim_ai_item(actor_id: int, cell: Vector2i, ttl_ms: int = 600) -> void:
+	_prune_ai_item_claims()
+	_ai_item_claims[cell] = {
+		"actor_id": actor_id,
+		"expires_ms": get_simulation_time_ms() + ttl_ms,
+	}
+
+func is_ai_item_claimed_by_other(actor_id: int, cell: Vector2i) -> bool:
+	_prune_ai_item_claims()
+	if not _ai_item_claims.has(cell):
+		return false
+	return int((_ai_item_claims[cell] as Dictionary).get("actor_id", 0)) != actor_id
+
+func release_ai_item_claims(actor_id: int) -> void:
+	for cell: Vector2i in _ai_item_claims.keys():
+		if int((_ai_item_claims[cell] as Dictionary).get("actor_id", 0)) == actor_id:
+			_ai_item_claims.erase(cell)
 
 func get_player() -> GameActor:
 	return _player
@@ -94,9 +151,21 @@ func request_bomb(actor: GameActor) -> bool:
 	var cell: Vector2i = actor.current_cell()
 	if not board.can_place_bubble(cell):
 		return false
+	var initially_overlapping_actors: Array[GameActor] = []
+	for battle_actor: GameActor in _actors:
+		if not is_instance_valid(battle_actor) or battle_actor.stats.is_dead:
+			continue
+		if cell in GameRules.body_cells(battle_actor.position):
+			initially_overlapping_actors.append(battle_actor)
 	var bubble := GameBubble.new()
 	_entity_root.add_child(bubble)
-	bubble.setup(actor, cell, settings.bubble_skin)
+	bubble.setup(
+		actor,
+		cell,
+		settings.bubble_skin,
+		GameConstants.BUBBLE_FUSE_SECONDS,
+		initially_overlapping_actors
+	)
 	bubble.exploded.connect(_on_bubble_exploded)
 	board.register_bubble(bubble)
 	actor.stats.active_bubbles += 1
@@ -153,6 +222,7 @@ func _clear_match_nodes() -> void:
 	_actors.clear()
 	_ai_controllers.clear()
 	_scores.clear()
+	_ai_item_claims.clear()
 	_player = null
 	for child: Node in _entity_root.get_children():
 		child.queue_free()
@@ -300,8 +370,9 @@ func _respawn_later(actor: GameActor) -> void:
 func _find_respawn_cell(actor: GameActor) -> Vector2i:
 	var candidates: Array[Vector2i] = board.get_open_cells()
 	candidates.shuffle()
+	var forecast: AIHazardForecast = build_ai_forecast()
 	for cell: Vector2i in candidates:
-		if danger_eta_ms(cell) < 1500:
+		if forecast.danger_eta_ms(cell) < 1500:
 			continue
 		var blocked: bool = false
 		for other: GameActor in _actors:
@@ -417,6 +488,12 @@ func _register_action(action: StringName, keycodes: Array) -> void:
 func _format_time(seconds_left: float) -> String:
 	var total_seconds: int = maxi(0, ceili(seconds_left))
 	return "%02d:%02d" % [total_seconds / 60, total_seconds % 60]
+
+func _prune_ai_item_claims() -> void:
+	var now_ms: int = get_simulation_time_ms()
+	for cell: Vector2i in _ai_item_claims.keys():
+		if int((_ai_item_claims[cell] as Dictionary).get("expires_ms", 0)) <= now_ms:
+			_ai_item_claims.erase(cell)
 
 func _audio_call(method: StringName, arguments: Array = []) -> void:
 	if "--mute" in OS.get_cmdline_user_args():

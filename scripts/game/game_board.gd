@@ -66,7 +66,8 @@ func can_actor_occupy(world_position: Vector2, actor: GameActor) -> bool:
 			return false
 		if bombs.has(cell):
 			var bubble: GameBubble = bombs[cell] as GameBubble
-			var can_finish_exiting: bool = bubble.bubble_owner == actor and cell in current_cells
+			var can_finish_exiting: bool = is_instance_valid(bubble) \
+				and bubble.can_actor_finish_exiting(actor, current_cells)
 			if not can_finish_exiting:
 				return false
 	return true

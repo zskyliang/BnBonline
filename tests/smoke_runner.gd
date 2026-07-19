@@ -13,6 +13,7 @@ func _run() -> void:
 	await process_frame
 	# Persisted player settings must not make the smoke scenario nondeterministic.
 	match_node.settings.map_id = "classic"
+	match_node.settings.ai_count = 1
 	match_node.start_match()
 	await process_frame
 	_assert(match_node.get_actors().size() == match_node.settings.ai_count + 1, "configured fighters spawned")
@@ -96,6 +97,36 @@ func _run() -> void:
 	player.rescue()
 	match_node._active_explosions.erase(full_hit_effect)
 	full_hit_effect.queue_free()
+	var ai_actor: GameActor
+	for battle_actor: GameActor in match_node.get_actors():
+		if not battle_actor.is_player:
+			ai_actor = battle_actor
+			break
+	_assert(is_instance_valid(ai_actor), "AI actor available for overlapping-bubble collision test")
+	if is_instance_valid(ai_actor):
+		for child: Node in ai_actor.get_children():
+			if child is RuleAI:
+				(child as RuleAI).stop_thinking()
+		var overlap_cell := Vector2i(7, 6)
+		match_node.board.cells[overlap_cell.y][overlap_cell.x] = 0
+		match_node.board.cells[overlap_cell.y + 1][overlap_cell.x] = 0
+		player.position = GameConstants.grid_to_world(overlap_cell)
+		ai_actor.position = GameConstants.grid_to_world(overlap_cell)
+		_assert(match_node.request_bomb(ai_actor), "AI can place a bubble under another actor")
+		var overlap_bubble: GameBubble = match_node.board.bombs.get(overlap_cell) as GameBubble
+		player.position += Vector2(0.0, 21.0)
+		_assert(
+			match_node.board.can_actor_occupy(player.position + Vector2(0.0, 3.0), player),
+			"non-owner can finish leaving a bubble placed underfoot"
+		)
+		player.position = GameConstants.grid_to_world(overlap_cell + Vector2i.DOWN)
+		_assert(
+			not match_node.board.can_actor_occupy(player.position + Vector2(0.0, -14.0), player),
+			"non-owner cannot re-enter after fully clearing the underfoot bubble"
+		)
+		match_node.board.unregister_bubble(overlap_bubble)
+		ai_actor.stats.active_bubbles = maxi(0, ai_actor.stats.active_bubbles - 1)
+		overlap_bubble.queue_free()
 	player.position = GameConstants.grid_to_world(Vector2i.ZERO)
 	_assert(match_node.request_bomb(player), "player bubble accepted")
 	_assert(match_node.board.bombs.size() >= 1, "bubble registered on board")
