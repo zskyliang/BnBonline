@@ -6,6 +6,7 @@ var settings: MatchSettings
 var board: GameBoard
 var hud: GameHud
 var _arena_timer_label: Label
+var _fps_label: Label
 
 var _world: Node2D
 var _entity_root: Node2D
@@ -13,6 +14,8 @@ var _effect_root: Node2D
 var _actors: Array[GameActor] = []
 var _ai_controllers: Array[RuleAI] = []
 var _active_explosions: Array[ExplosionEffect] = []
+var _active_unsafe_cells: Dictionary = {}
+var _active_explosion_attackers: Dictionary = {}
 var _scores: Dictionary = {}
 var _player: GameActor
 var _remaining_seconds: float = GameConstants.ROUND_SECONDS
@@ -21,6 +24,17 @@ var _is_paused: bool = false
 var _simulation_time_ms: float = 0.0
 var _rng := RandomNumberGenerator.new()
 var _ai_item_claims: Dictionary = {}
+var _ai_schedule_elapsed_seconds: float = 0.0
+var _next_ai_index: int = 0
+var _displayed_seconds: int = -1
+var _last_fps_update_ms: int = -1000
+var _cached_ai_forecast: AIHazardForecast
+var _cached_ai_forecast_horizon_ms: int = 0
+var _cached_ai_forecast_built_ms: int = 0
+var _ai_hazard_revision: int = 0
+var _cached_ai_hazard_revision: int = -1
+
+const AI_FORECAST_CACHE_MS: int = 60
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -35,13 +49,21 @@ func _physics_process(delta: float) -> void:
 	if _round_over or _is_paused:
 		return
 	_simulation_time_ms += delta * 1000.0
+	_process_ai_schedule(delta)
 	_remaining_seconds = maxf(0.0, _remaining_seconds - delta)
-	hud.update_timer(_remaining_seconds)
-	_arena_timer_label.text = _format_time(_remaining_seconds)
+	_update_time_display()
 	_resolve_explosion_hits()
 	_resolve_actor_contacts()
 	if _remaining_seconds <= 0.0:
 		_end_round()
+
+func _process(_delta: float) -> void:
+	var now_ms: int = Time.get_ticks_msec()
+	if now_ms - _last_fps_update_ms < 250:
+		return
+	_last_fps_update_ms = now_ms
+	if is_instance_valid(_fps_label):
+		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause_game") and not _round_over:
@@ -57,14 +79,14 @@ func start_match() -> void:
 	_round_over = false
 	_remaining_seconds = GameConstants.ROUND_SECONDS
 	_simulation_time_ms = 0.0
+	_displayed_seconds = -1
 	_clear_match_nodes()
 	board.reset(MapCatalog.get_map(settings.map_id))
 	_spawn_fighters()
 	hud.sync_settings(settings)
 	hud.hide_pause()
 	hud.hide_result()
-	hud.update_timer(_remaining_seconds)
-	_arena_timer_label.text = _format_time(_remaining_seconds)
+	_update_time_display()
 	_update_scoreboard()
 	_audio_call(&"play_sfx", [&"start"])
 	_audio_call(&"play_music")
@@ -112,7 +134,25 @@ func build_ai_snapshot() -> AIBattleSnapshot:
 	return snapshot
 
 func build_ai_forecast(horizon_ms: int = 5000) -> AIHazardForecast:
-	return AIHazardForecast.build(build_ai_snapshot(), horizon_ms)
+	return get_shared_ai_forecast(build_ai_snapshot(), horizon_ms)
+
+func get_shared_ai_forecast(
+		snapshot: AIBattleSnapshot,
+		horizon_ms: int
+	) -> AIHazardForecast:
+	var now_ms: int = get_simulation_time_ms()
+	var cache_age_ms: int = maxi(0, now_ms - _cached_ai_forecast_built_ms)
+	if _cached_ai_forecast == null \
+			or _cached_ai_forecast_horizon_ms != horizon_ms \
+			or _cached_ai_hazard_revision != _ai_hazard_revision \
+			or cache_age_ms > AI_FORECAST_CACHE_MS:
+		_cached_ai_forecast = AIHazardForecast.build(snapshot, horizon_ms)
+		_cached_ai_forecast_horizon_ms = horizon_ms
+		_cached_ai_forecast_built_ms = now_ms
+		_cached_ai_hazard_revision = _ai_hazard_revision
+		cache_age_ms = 0
+	_cached_ai_forecast.set_time_offset_ms(cache_age_ms)
+	return _cached_ai_forecast
 
 func get_simulation_time_ms() -> int:
 	return int(_simulation_time_ms)
@@ -179,6 +219,7 @@ func _build_scene_tree() -> void:
 	board = GameBoard.new()
 	board.name = "Board"
 	_world.add_child(board)
+	board.hazard_changed.connect(_invalidate_ai_forecast)
 	_entity_root = Node2D.new()
 	_entity_root.name = "Entities"
 	_world.add_child(_entity_root)
@@ -190,14 +231,26 @@ func _build_scene_tree() -> void:
 	chrome.layer = 5
 	add_child(chrome)
 	_arena_timer_label = Label.new()
-	_arena_timer_label.position = Vector2(694, 55)
+	_arena_timer_label.position = Vector2(694, 33)
 	_arena_timer_label.size = Vector2(92, 24)
 	_arena_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_arena_timer_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_arena_timer_label.add_theme_font_size_override("font_size", 16)
 	_arena_timer_label.add_theme_color_override("font_color", Color("ffe36e"))
 	_arena_timer_label.add_theme_constant_override("outline_size", 3)
 	_arena_timer_label.add_theme_color_override("font_outline_color", Color("103657"))
 	chrome.add_child(_arena_timer_label)
+	_fps_label = Label.new()
+	_fps_label.position = Vector2(655, 1)
+	_fps_label.size = Vector2(125, 24)
+	_fps_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_fps_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_fps_label.add_theme_font_size_override("font_size", 14)
+	_fps_label.add_theme_color_override("font_color", Color("b8f4cf"))
+	_fps_label.add_theme_constant_override("outline_size", 3)
+	_fps_label.add_theme_color_override("font_outline_color", Color("103657"))
+	_fps_label.text = "FPS: 0"
+	chrome.add_child(_fps_label)
 	var canvas := CanvasLayer.new()
 	canvas.name = "Interface"
 	canvas.layer = 20
@@ -219,8 +272,12 @@ func _connect_hud() -> void:
 
 func _clear_match_nodes() -> void:
 	_active_explosions.clear()
+	_active_unsafe_cells.clear()
+	_active_explosion_attackers.clear()
 	_actors.clear()
 	_ai_controllers.clear()
+	_ai_schedule_elapsed_seconds = 0.0
+	_next_ai_index = 0
 	_scores.clear()
 	_ai_item_claims.clear()
 	_player = null
@@ -240,8 +297,36 @@ func _spawn_fighters() -> void:
 		var controller := RuleAI.new()
 		controller.name = "RuleAI%d" % (index + 1)
 		ai_actor.add_child(controller)
-		controller.setup(ai_actor, board, self)
+		# Normal matches use one shared round-robin scheduler so four 150 ms
+		# thinkers do not create a main-thread spike on the same physics frame.
+		controller.setup(ai_actor, board, self, -1, false)
 		_ai_controllers.append(controller)
+	if not _ai_controllers.is_empty():
+		_ai_schedule_elapsed_seconds = _ai_schedule_slot_seconds()
+
+func _process_ai_schedule(delta: float) -> void:
+	if _ai_controllers.is_empty():
+		return
+	_ai_schedule_elapsed_seconds += delta
+	var slot_seconds: float = _ai_schedule_slot_seconds()
+	if _ai_schedule_elapsed_seconds + 0.000001 < slot_seconds:
+		return
+	# Never catch up several thinkers in one frame after a hitch. Keeping at
+	# most one slot of debt smooths the next frame without lowering steady-state
+	# per-AI cadence.
+	_ai_schedule_elapsed_seconds = minf(
+		_ai_schedule_elapsed_seconds - slot_seconds,
+		slot_seconds
+	)
+	if _next_ai_index >= _ai_controllers.size():
+		_next_ai_index = 0
+	var controller: RuleAI = _ai_controllers[_next_ai_index]
+	_next_ai_index = (_next_ai_index + 1) % _ai_controllers.size()
+	if is_instance_valid(controller):
+		controller.reconsider_now()
+
+func _ai_schedule_slot_seconds() -> float:
+	return GameConstants.AI_THINK_SECONDS / maxf(1.0, float(_ai_controllers.size()))
 
 func _spawn_actor(
 		display_name: String,
@@ -299,33 +384,47 @@ func _on_bubble_exploded(bubble: GameBubble) -> void:
 	_effect_root.add_child(effect)
 	effect.setup(blast, bubble.cell, bubble.bubble_owner)
 	effect.finished.connect(_on_explosion_finished)
-	_active_explosions.append(effect)
+	_register_explosion_effect(effect)
 	_audio_call(&"play_sfx", [&"explode"])
 	for chained_bubble: GameBubble in chained:
 		chained_bubble.call_deferred("explode_now")
 
 func _on_explosion_finished(effect: ExplosionEffect) -> void:
+	_unregister_explosion_effect(effect)
+
+func _register_explosion_effect(effect: ExplosionEffect) -> void:
+	_active_explosions.append(effect)
+	_rebuild_active_explosion_lookup()
+	_invalidate_ai_forecast()
+
+func _unregister_explosion_effect(effect: ExplosionEffect) -> void:
 	_active_explosions.erase(effect)
+	_rebuild_active_explosion_lookup()
+	_invalidate_ai_forecast()
 
 func _resolve_explosion_hits() -> void:
-	var unsafe_cells: Dictionary = {}
-	var attackers: Dictionary = {}
-	for effect: ExplosionEffect in _active_explosions:
-		if not is_instance_valid(effect):
-			continue
-		for cell: Vector2i in effect.cells:
-			unsafe_cells[cell] = true
-			if is_instance_valid(effect.attacker):
-				attackers[cell] = effect.attacker
 	for actor: GameActor in _actors:
 		if not is_instance_valid(actor) or actor.stats.is_dead:
 			continue
 		var feet: Array[Vector2i] = actor.foot_cells()
-		if GameRules.both_feet_unsafe(actor.position, unsafe_cells):
-			var attacker: GameActor = attackers.get(feet[0], attackers.get(feet[1], null)) as GameActor
+		if GameRules.both_feet_unsafe(actor.position, _active_unsafe_cells):
+			var attacker: GameActor = _active_explosion_attackers.get(
+				feet[0], _active_explosion_attackers.get(feet[1], null)
+			) as GameActor
 			actor.register_unsafe_frame(attacker)
 		else:
 			actor.register_safe_frame()
+
+func _rebuild_active_explosion_lookup() -> void:
+	_active_unsafe_cells.clear()
+	_active_explosion_attackers.clear()
+	for effect: ExplosionEffect in _active_explosions:
+		if not is_instance_valid(effect):
+			continue
+		for cell: Vector2i in effect.cells:
+			_active_unsafe_cells[cell] = true
+			if is_instance_valid(effect.attacker):
+				_active_explosion_attackers[cell] = effect.attacker
 
 func _resolve_actor_contacts() -> void:
 	for left_index: int in range(_actors.size()):
@@ -489,11 +588,23 @@ func _format_time(seconds_left: float) -> String:
 	var total_seconds: int = maxi(0, ceili(seconds_left))
 	return "%02d:%02d" % [total_seconds / 60, total_seconds % 60]
 
+func _update_time_display() -> void:
+	var total_seconds: int = maxi(0, ceili(_remaining_seconds))
+	if total_seconds == _displayed_seconds:
+		return
+	_displayed_seconds = total_seconds
+	hud.update_timer(float(total_seconds))
+	_arena_timer_label.text = _format_time(float(total_seconds))
+
 func _prune_ai_item_claims() -> void:
 	var now_ms: int = get_simulation_time_ms()
 	for cell: Vector2i in _ai_item_claims.keys():
 		if int((_ai_item_claims[cell] as Dictionary).get("expires_ms", 0)) <= now_ms:
 			_ai_item_claims.erase(cell)
+
+func _invalidate_ai_forecast() -> void:
+	_ai_hazard_revision += 1
+	_cached_ai_forecast = null
 
 func _audio_call(method: StringName, arguments: Array = []) -> void:
 	if "--mute" in OS.get_cmdline_user_args():

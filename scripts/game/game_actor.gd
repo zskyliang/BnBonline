@@ -38,6 +38,9 @@ var _trap_timer: Timer
 var _animation_time: float = 0.0
 var _animation_frame: int = 0
 var _death_time: float = 0.0
+var _rendered_animation_frame: int = -1
+var _rendered_facing: Facing = Facing.DOWN
+var _rendered_state: int = -1
 
 func setup(
 		new_name: String,
@@ -74,7 +77,11 @@ func _physics_process(delta: float) -> void:
 	_try_pickup()
 
 func _process(delta: float) -> void:
-	z_index = 40 + int(position.y)
+	if stats.is_dead and not visible:
+		return
+	var desired_z_index: int = 40 + int(position.y)
+	if z_index != desired_z_index:
+		z_index = desired_z_index
 	if stats.is_dead:
 		_death_time += delta
 		_animation_frame = mini(10, int(_death_time / 0.2))
@@ -88,9 +95,12 @@ func _process(delta: float) -> void:
 		_update_sprite_region()
 		return
 	if stats.is_invincible():
-		modulate.a = 0.45 if int(Time.get_ticks_msec() / 100) % 2 == 0 else 1.0
+		var desired_alpha: float = 0.45 if int(Time.get_ticks_msec() / 100) % 2 == 0 else 1.0
+		if not is_equal_approx(modulate.a, desired_alpha):
+			modulate.a = desired_alpha
 	else:
-		modulate.a = 1.0
+		if not is_equal_approx(modulate.a, 1.0):
+			modulate.a = 1.0
 	if _desired_direction != Vector2.ZERO:
 		_animation_time += delta
 		_animation_frame = int(_animation_time / 0.11) % 6
@@ -188,7 +198,7 @@ func die(attacker: GameActor) -> void:
 	_death_time = 0.0
 	_animation_frame = 0
 	_sprite.texture = ROLE_1_DIE if is_player else ROLE_2_DIE
-	_update_sprite_region()
+	_update_sprite_region(true)
 	died.emit(self, attacker)
 
 func respawn(spawn_cell: Vector2i) -> void:
@@ -199,6 +209,7 @@ func respawn(spawn_cell: Vector2i) -> void:
 	last_attacker = null
 	unsafe_frame_count = 0
 	position = GameConstants.grid_to_world(spawn_cell)
+	reset_physics_interpolation()
 	visible = true
 	modulate.a = 1.0
 	_facing = Facing.DOWN
@@ -264,12 +275,13 @@ func _build_visuals() -> void:
 
 func _set_normal_texture() -> void:
 	_sprite.texture = ROLE_1 if is_player else ROLE_2
-	_update_sprite_region()
+	_update_sprite_region(true)
 
 func _show_trap_visual() -> void:
 	_animation_time = 0.0
 	_animation_frame = 0
 	_sprite.texture = ROLE_1_TRAP if is_player else ROLE_2_TRAP
+	_update_sprite_region(true)
 	_trap_sprite = Sprite2D.new()
 	_trap_sprite.texture = TRAP_BUBBLE
 	_trap_sprite.region_enabled = true
@@ -292,9 +304,18 @@ func _clear_trap_visual() -> void:
 func _on_trap_timeout() -> void:
 	die(last_attacker)
 
-func _update_sprite_region() -> void:
+func _update_sprite_region(force: bool = false) -> void:
 	if not is_instance_valid(_sprite):
 		return
+	var visual_state: int = 2 if stats.is_dead else (1 if stats.is_trapped else 0)
+	if not force \
+			and _animation_frame == _rendered_animation_frame \
+			and _facing == _rendered_facing \
+			and visual_state == _rendered_state:
+		return
+	_rendered_animation_frame = _animation_frame
+	_rendered_facing = _facing
+	_rendered_state = visual_state
 	var frame_width: int = 48 if is_player else 56
 	var frame_height: int = 64 if is_player else 67
 	if stats.is_dead:

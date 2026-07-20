@@ -30,6 +30,8 @@ var blast_events: Array[BombBlast] = []
 var destroyed_at_ms: Dictionary = {}
 var initial_cells: Array[PackedInt32Array] = []
 var predicted_cells: Array[PackedInt32Array] = []
+var _latest_danger_end_ms: int = 0
+var _time_offset_ms: int = 0
 
 
 static func build(
@@ -82,17 +84,19 @@ func danger_eta_ms(cell: Vector2i) -> int:
 		return NO_DANGER_MS
 	var best: int = NO_DANGER_MS
 	for interval: Vector2i in unsafe_intervals[cell] as Array:
-		if interval.x <= 0 and interval.y >= 0:
+		if interval.y < _time_offset_ms:
+			continue
+		if interval.x <= _time_offset_ms:
 			return 0
-		best = mini(best, interval.x)
+		best = mini(best, interval.x - _time_offset_ms)
 	return best
 
 
 func is_unsafe(cell: Vector2i, from_ms: int, to_ms: int, margin_ms: int = 0) -> bool:
 	if not unsafe_intervals.has(cell):
 		return false
-	var interval_start: int = mini(from_ms, to_ms)
-	var interval_end: int = maxi(from_ms, to_ms)
+	var interval_start: int = mini(from_ms, to_ms) + _time_offset_ms
+	var interval_end: int = maxi(from_ms, to_ms) + _time_offset_ms
 	for unsafe: Vector2i in unsafe_intervals[cell] as Array:
 		if interval_start <= unsafe.y + margin_ms and interval_end >= unsafe.x - margin_ms:
 			return true
@@ -102,8 +106,8 @@ func is_unsafe(cell: Vector2i, from_ms: int, to_ms: int, margin_ms: int = 0) -> 
 func is_bomb_blocked(cell: Vector2i, from_ms: int, to_ms: int) -> bool:
 	if not bomb_block_intervals.has(cell):
 		return false
-	var interval_start: int = mini(from_ms, to_ms)
-	var interval_end: int = maxi(from_ms, to_ms)
+	var interval_start: int = mini(from_ms, to_ms) + _time_offset_ms
+	var interval_end: int = maxi(from_ms, to_ms) + _time_offset_ms
 	for blocked: Vector2i in bomb_block_intervals[cell] as Array:
 		if interval_start < blocked.y and interval_end > blocked.x:
 			return true
@@ -111,11 +115,7 @@ func is_bomb_blocked(cell: Vector2i, from_ms: int, to_ms: int) -> bool:
 
 
 func latest_danger_end_ms() -> int:
-	var latest: int = 0
-	for intervals: Variant in unsafe_intervals.values():
-		for interval: Vector2i in intervals as Array:
-			latest = maxi(latest, interval.y)
-	return latest
+	return maxi(0, _latest_danger_end_ms - _time_offset_ms)
 
 
 func is_predicted_walkable(cell: Vector2i, at_ms: int) -> bool:
@@ -126,7 +126,15 @@ func is_predicted_walkable(cell: Vector2i, at_ms: int) -> bool:
 		return true
 	return GameRules.is_destructible(initial_code) \
 		and destroyed_at_ms.has(cell) \
-		and int(destroyed_at_ms[cell]) <= at_ms
+		and int(destroyed_at_ms[cell]) <= at_ms + _time_offset_ms
+
+
+func set_time_offset_ms(offset_ms: int) -> void:
+	_time_offset_ms = maxi(0, offset_ms)
+
+
+func blast_time_ms(blast_event: BombBlast) -> int:
+	return maxi(0, blast_event.explode_ms - _time_offset_ms)
 
 
 func _simulate_bombs(simulated_bombs: Array[Dictionary]) -> void:
@@ -200,6 +208,7 @@ func _record_bomb_blocks(simulated_bombs: Array[Dictionary]) -> void:
 func _add_unsafe_interval(cell: Vector2i, start_ms: int, end_ms: int) -> void:
 	if end_ms < start_ms:
 		return
+	_latest_danger_end_ms = maxi(_latest_danger_end_ms, end_ms)
 	if not unsafe_intervals.has(cell):
 		unsafe_intervals[cell] = []
 	var intervals: Array = unsafe_intervals[cell] as Array

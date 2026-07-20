@@ -3,6 +3,7 @@ extends Node2D
 ## Owns mutable map cells, map rendering, items, bombs, and pathfinding grids.
 
 signal cell_changed(cell: Vector2i, new_code: int)
+signal hazard_changed
 
 const BACKGROUND_TEXTURE: Texture2D = preload("res://assets/sprites/BG.png")
 const TOWN_GROUND_TEXTURE: Texture2D = preload("res://assets/sprites/TownGround.png")
@@ -31,6 +32,7 @@ var _rng := RandomNumberGenerator.new()
 
 func _init() -> void:
 	_rng.randomize()
+	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 
 func reset(new_map_data: MapData) -> void:
 	map_data = new_map_data
@@ -43,10 +45,10 @@ func reset(new_map_data: MapData) -> void:
 	_visual_root = Node2D.new()
 	_visual_root.name = "MapVisuals"
 	add_child(_visual_root)
-	_draw_background()
-	_draw_ground()
+	queue_redraw()
 	_draw_barriers()
 	_draw_decorations()
+	hazard_changed.emit()
 
 func cell_code(cell: Vector2i) -> int:
 	if not GameConstants.is_inside(cell):
@@ -94,7 +96,13 @@ func _has_horizontal_rigid_clearance(
 	var row: int = GameConstants.world_to_grid(to_position).y
 	if row < 0 or row >= GameConstants.GRID_ROWS:
 		return false
-	for x: int in range(GameConstants.GRID_COLUMNS):
+	var nearby_columns: Vector2i = _nearby_axis_range(
+		from_position.x,
+		to_position.x,
+		GameConstants.GRID_ORIGIN.x,
+		GameConstants.GRID_COLUMNS
+	)
+	for x: int in range(nearby_columns.x, nearby_columns.y + 1):
 		var cell := Vector2i(x, row)
 		if not _uses_rigid_center_boundary(cell):
 			continue
@@ -118,7 +126,13 @@ func _has_vertical_rigid_clearance(
 	var column: int = GameConstants.world_to_grid(to_position).x
 	if column < 0 or column >= GameConstants.GRID_COLUMNS:
 		return false
-	for y: int in range(GameConstants.GRID_ROWS):
+	var nearby_rows: Vector2i = _nearby_axis_range(
+		from_position.y,
+		to_position.y,
+		GameConstants.GRID_ORIGIN.y,
+		GameConstants.GRID_ROWS
+	)
+	for y: int in range(nearby_rows.x, nearby_rows.y + 1):
 		var cell := Vector2i(column, y)
 		if not _uses_rigid_center_boundary(cell):
 			continue
@@ -138,12 +152,29 @@ func _uses_rigid_center_boundary(cell: Vector2i) -> bool:
 	var code: int = cell_code(cell)
 	return code > 0 and code < 100
 
+func _nearby_axis_range(
+		from_axis: float,
+		to_axis: float,
+		origin_axis: float,
+		cell_count: int
+	) -> Vector2i:
+	var minimum_axis: float = minf(from_axis, to_axis) \
+		- GameRules.RIGID_CENTER_CLEARANCE \
+		- GameConstants.CELL_SIZE
+	var maximum_axis: float = maxf(from_axis, to_axis) + GameRules.RIGID_CENTER_CLEARANCE
+	return Vector2i(
+		clampi(floori((minimum_axis - origin_axis) / GameConstants.CELL_SIZE), 0, cell_count - 1),
+		clampi(floori((maximum_axis - origin_axis) / GameConstants.CELL_SIZE), 0, cell_count - 1)
+	)
+
 func register_bubble(bubble: GameBubble) -> void:
 	bombs[bubble.cell] = bubble
+	hazard_changed.emit()
 
 func unregister_bubble(bubble: GameBubble) -> void:
 	if bombs.get(bubble.cell) == bubble:
 		bombs.erase(bubble.cell)
+		hazard_changed.emit()
 
 func can_place_bubble(cell: Vector2i) -> bool:
 	return GameConstants.is_inside(cell) and cell_code(cell) == 0 and not bombs.has(cell)
@@ -173,6 +204,7 @@ func destroy_cell(cell: Vector2i) -> int:
 	cells[cell.y][cell.x] = item_code
 	_draw_item(cell, item_code)
 	cell_changed.emit(cell, item_code)
+	hazard_changed.emit()
 	return item_code
 
 func get_open_cells() -> Array[Vector2i]:
@@ -219,15 +251,8 @@ func find_path(from_cell: Vector2i, to_cell: Vector2i, actor: GameActor = null) 
 func predicted_blast(cell: Vector2i, power: int) -> Array[Vector2i]:
 	return GameRules.blast_cells(cell, power, cells)
 
-func _draw_background() -> void:
-	var sprite := Sprite2D.new()
-	sprite.texture = BACKGROUND_TEXTURE
-	sprite.centered = false
-	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	sprite.z_index = 0
-	_visual_root.add_child(sprite)
-
-func _draw_ground() -> void:
+func _draw() -> void:
+	draw_texture(BACKGROUND_TEXTURE, Vector2.ZERO)
 	for y: int in range(GameConstants.GRID_ROWS):
 		for x: int in range(GameConstants.GRID_COLUMNS):
 			var cell := Vector2i(x, y)
@@ -239,9 +264,11 @@ func _draw_ground() -> void:
 			else:
 				texture = TOWN_GROUND_TEXTURE
 				rect = Rect2((map_data.ground_cells[y][x] - 1) * 40, 0, 40, 40)
-			var tile: Sprite2D = _make_region_sprite(texture, rect, GameConstants.grid_to_top_left(cell), Vector2(40, 40))
-			tile.z_index = 1
-			_visual_root.add_child(tile)
+			draw_texture_rect_region(
+				texture,
+				Rect2(GameConstants.grid_to_top_left(cell), Vector2(40, 40)),
+				rect
+			)
 
 func _draw_barriers() -> void:
 	for y: int in range(GameConstants.GRID_ROWS):

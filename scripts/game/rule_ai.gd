@@ -19,6 +19,10 @@ const MAX_SAFE_PRESSURE_CHOICES: int = 1
 const MAX_STATIC_THREAT_CANDIDATES: int = 24
 const MIN_MARGINAL_THREAT_CELLS: float = 2.0
 const MIN_MARGINAL_REACHABLE_RATIO: float = 0.10
+const PATROL_MIN_FLOW_DISTANCE: int = 3
+const PATROL_DESIRED_FLOW_DISTANCE: int = 9
+const RECENT_NAVIGATION_CELL_LIMIT: int = 7
+const MAX_ITEM_PATH_CANDIDATES: int = 3
 
 var actor: GameActor
 var board: GameBoard
@@ -57,6 +61,7 @@ var _think_timer: Timer
 var _plan: AITemporalPlanner.TimedPlan
 var _plan_index: int = 0
 var _plan_started_ms: int = 0
+var _continuous_plan_motion: bool = false
 var _rng := RandomNumberGenerator.new()
 var _last_bomb_ms: int = -10000
 var _locked_target: Vector2i = INVALID_CELL
@@ -72,25 +77,32 @@ var _total_threat_cells: float = 0.0
 var _target_threat_coverage: float = 0.0
 var _last_marginal_threat: float = 0.0
 var _last_pressure_score: float = 0.0
+var _thinking_enabled: bool = true
+var _last_navigation_cell: Vector2i = INVALID_CELL
+var _navigation_heading: Vector2i = Vector2i.ZERO
+var _recent_navigation_cells: Array[Vector2i] = []
 
 
 func setup(
 		new_actor: GameActor,
 		new_board: GameBoard,
 		new_match_controller: MatchController,
-		decision_seed: int = -1
+		decision_seed: int = -1,
+		use_internal_timer: bool = true
 	) -> void:
 	actor = new_actor
 	board = new_board
 	match_controller = new_match_controller
+	_thinking_enabled = true
 	_rng.seed = decision_seed if decision_seed >= 0 else hash(actor.actor_name) + Time.get_ticks_msec()
-	_think_timer = Timer.new()
-	_think_timer.wait_time = GameConstants.AI_THINK_SECONDS
-	_think_timer.process_callback = Timer.TIMER_PROCESS_PHYSICS
-	_think_timer.timeout.connect(_think)
-	add_child(_think_timer)
-	_think_timer.start()
-	_think()
+	if use_internal_timer:
+		_think_timer = Timer.new()
+		_think_timer.wait_time = GameConstants.AI_THINK_SECONDS
+		_think_timer.process_callback = Timer.TIMER_PROCESS_PHYSICS
+		_think_timer.timeout.connect(_think)
+		add_child(_think_timer)
+		_think_timer.start()
+		_think()
 
 
 func _physics_process(_delta: float) -> void:
@@ -110,10 +122,12 @@ func set_decision_seed(seed: int) -> void:
 
 
 func reconsider_now() -> void:
-	_think()
+	if _thinking_enabled:
+		_think()
 
 
 func reset_for_scenario(seed: int) -> void:
+	_thinking_enabled = true
 	set_decision_seed(seed)
 	_clear_plan()
 	current_mode = Mode.PATROLLING
@@ -134,9 +148,13 @@ func reset_for_scenario(seed: int) -> void:
 	_target_locked_until_ms = 0
 	_last_enemy_positions.clear()
 	_enemy_directions.clear()
+	_last_navigation_cell = INVALID_CELL
+	_navigation_heading = Vector2i.ZERO
+	_recent_navigation_cells.clear()
 
 
 func stop_thinking() -> void:
+	_thinking_enabled = false
 	if is_instance_valid(_think_timer):
 		_think_timer.stop()
 	_clear_plan()
@@ -155,9 +173,11 @@ func _think() -> void:
 		_clear_plan()
 		_finish_decision(started_usec)
 		return
+	_record_navigation_cell(self_state.cell)
 	_update_enemy_motion(snapshot, self_state.team_id)
-	var forecast: AIHazardForecast = AIHazardForecast.build(snapshot, PLANNING_HORIZON_MS)
-	_refresh_pressure_metrics(snapshot, self_state, forecast)
+	var forecast: AIHazardForecast = match_controller.get_shared_ai_forecast(
+		snapshot, PLANNING_HORIZON_MS
+	)
 	var current: Vector2i = self_state.cell
 	if _needs_escape(current, forecast):
 		if current_mode == Mode.EVADING and _remaining_plan_is_safe(forecast, true):
@@ -178,6 +198,7 @@ func _think() -> void:
 		_set_debug(Mode.EVADING, _plan.target_cell(), last_decision_score)
 		_finish_decision(started_usec)
 		return
+	_refresh_pressure_metrics(snapshot, self_state, forecast)
 	if _locked_plan_can_continue(snapshot, forecast):
 		if current_mode == Mode.COLLECTING:
 			match_controller.claim_ai_item(actor.get_instance_id(), decision_target)
@@ -261,7 +282,8 @@ func _follow_plan() -> void:
 		var previous_planned_cell: Vector2i = _plan.cells[_plan_index - 1]
 		var is_wait_step: bool = next_cell == previous_planned_cell
 		var early_allowance_ms: int = 0 if is_wait_step else AITemporalPlanner.SAFETY_MARGIN_MS
-		if elapsed_ms + early_allowance_ms < _plan.arrival_ms[_plan_index]:
+		if not (_continuous_plan_motion and not is_wait_step) \
+				and elapsed_ms + early_allowance_ms < _plan.arrival_ms[_plan_index]:
 			actor.set_ai_direction(Vector2.ZERO)
 			return
 		_plan_index += 1
@@ -341,34 +363,57 @@ func _find_item_decision(
 		self_state: AIBattleSnapshot.ActorState,
 		forecast: AIHazardForecast
 	) -> Dictionary:
-	var best: Dictionary = {}
-	var best_score: float = -INF
+	var ranked: Array[Dictionary] = []
 	var safe_tail_ms: int = maxi(900, forecast.latest_danger_end_ms() + 100)
 	for item_cell: Vector2i in snapshot.item_cells:
 		var item_code: int = snapshot.cells[item_cell.y][item_cell.x]
 		var value: float = _item_value(item_code)
 		if value <= 0.0:
 			continue
-		var plan: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_path(
-			snapshot, forecast, self_state.cell, item_cell,
-			self_state.move_speed, 8000, safe_tail_ms
+		var competitor_eta: int = _best_competitor_eta(snapshot, self_state, item_cell)
+		var estimated_eta: int = ceili(
+			_manhattan(self_state.cell, item_cell) * GameConstants.CELL_SIZE \
+			/ maxf(1.0, self_state.move_speed) * 1000.0
 		)
-		if not plan.valid:
+		var rough_score: float = value - float(estimated_eta) / 90.0
+		if estimated_eta + AITemporalPlanner.WAIT_STEP_MS < competitor_eta:
+			rough_score += 22.0
+		elif competitor_eta + AITemporalPlanner.WAIT_STEP_MS < estimated_eta:
+			rough_score -= 42.0
+		if match_controller.is_ai_item_claimed_by_other(self_state.instance_id, item_cell):
+			rough_score -= 70.0
+		if item_cell == _locked_target and _now_ms() < _target_locked_until_ms:
+			rough_score += 18.0
+		ranked.append({"cell": item_cell, "value": value, "rough_score": rough_score})
+	ranked.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		return float(left["rough_score"]) > float(right["rough_score"])
+	)
+	for index: int in range(mini(MAX_ITEM_PATH_CANDIDATES, ranked.size())):
+		var candidate: Dictionary = ranked[index]
+		var item_cell: Vector2i = candidate["cell"] as Vector2i
+		var path: Array[Vector2i] = board.find_path(self_state.cell, item_cell, actor)
+		var plan: AITemporalPlanner.TimedPlan = _timed_plan_from_static_path(
+			path, self_state.move_speed
+		)
+		if not plan.valid or not _timed_plan_is_safe(plan, forecast):
 			continue
-		var score: float = value - float(plan.travel_ms()) / 90.0
+		if forecast.is_unsafe(
+				item_cell,
+				plan.travel_ms(),
+				maxi(plan.travel_ms() + 900, safe_tail_ms),
+				AITemporalPlanner.SAFETY_MARGIN_MS
+			):
+			continue
+		var score: float = float(candidate["value"]) - float(plan.travel_ms()) / 90.0
 		var competitor_eta: int = _best_competitor_eta(snapshot, self_state, item_cell)
 		if plan.travel_ms() + AITemporalPlanner.WAIT_STEP_MS < competitor_eta:
 			score += 22.0
 		elif competitor_eta + AITemporalPlanner.WAIT_STEP_MS < plan.travel_ms():
 			score -= 42.0
-		if match_controller.is_ai_item_claimed_by_other(self_state.instance_id, item_cell):
-			score -= 70.0
 		if item_cell == _locked_target and _now_ms() < _target_locked_until_ms:
 			score += 18.0
-		if score > best_score:
-			best_score = score
-			best = {"plan": plan, "cell": item_cell, "score": score}
-	return best
+		return {"plan": plan, "cell": item_cell, "score": score}
+	return {}
 
 
 func _find_pressure_decision(
@@ -667,29 +712,52 @@ func _find_patrol_decision(
 		return {}
 	if forecast.latest_danger_end_ms() == 0:
 		return _find_static_patrol_decision(candidates, self_state, target)
-	var reachable: Dictionary = AITemporalPlanner.reachable_cells(
+	# Patrol is interruptible and low priority. Use the cheap spatial reachability
+	# pass to rank destinations, then validate only a few concrete routes against
+	# the full hazard timeline.
+	var reachable: Dictionary = AITemporalPlanner.reachable_cells_fast(
 		snapshot, forecast, self_state.cell, self_state.move_speed, 6000
 	)
-	var best_cell: Vector2i = INVALID_CELL
-	var best_score: float = -INF
-	for _attempt: int in range(mini(24, candidates.size())):
-		var cell: Vector2i = candidates[_rng.randi_range(0, candidates.size() - 1)]
-		if _manhattan(self_state.cell, cell) < 2:
+	var spacious: bool = reachable.size() >= 12
+	var ranked: Array[Dictionary] = []
+	for cell: Vector2i in candidates:
+		var distance: int = _manhattan(self_state.cell, cell)
+		if distance < (PATROL_MIN_FLOW_DISTANCE if spacious else 2):
 			continue
 		if not reachable.has(cell):
 			continue
-		var score: float = -float(reachable[cell]) / 200.0
-		if target != null:
-			score -= _manhattan(cell, target.cell) * 2.0
-		if score > best_score:
-			best_score = score
-			best_cell = cell
-	if best_cell == INVALID_CELL:
-		return {}
-	var plan: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_path(
-		snapshot, forecast, self_state.cell, best_cell, self_state.move_speed, 6000, 600
+		var score: float = _patrol_flow_score(cell, self_state, target, spacious) \
+			- float(reachable[cell]) / 500.0
+		ranked.append({"cell": cell, "score": score})
+	ranked.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		return float(left["score"]) > float(right["score"])
 	)
-	return {"plan": plan, "cell": best_cell, "score": best_score} if plan.valid else {}
+	var reverse_fallback: Dictionary = {}
+	for index: int in range(mini(8, ranked.size())):
+		var choice: Dictionary = ranked[index]
+		var choice_cell: Vector2i = choice["cell"] as Vector2i
+		var path: Array[Vector2i] = board.find_path(self_state.cell, choice_cell, actor)
+		var plan: AITemporalPlanner.TimedPlan = _timed_plan_from_static_path(
+			path, self_state.move_speed
+		)
+		if not plan.valid or not _timed_plan_is_safe(plan, forecast):
+			continue
+		if forecast.is_unsafe(
+				choice_cell,
+				plan.travel_ms(),
+				plan.travel_ms() + 600,
+				AITemporalPlanner.SAFETY_MARGIN_MS
+			):
+			continue
+		var result: Dictionary = {
+			"plan": plan, "cell": choice_cell, "score": float(choice["score"]),
+		}
+		if _path_reverses_navigation_heading(path):
+			if reverse_fallback.is_empty():
+				reverse_fallback = result
+			continue
+		return result
+	return reverse_fallback
 
 
 func _find_static_patrol_decision(
@@ -697,24 +765,41 @@ func _find_static_patrol_decision(
 		self_state: AIBattleSnapshot.ActorState,
 		target: AIBattleSnapshot.ActorState
 	) -> Dictionary:
-	var best_cell: Vector2i = INVALID_CELL
-	var best_score: float = -INF
-	for _attempt: int in range(mini(24, candidates.size())):
-		var cell: Vector2i = candidates[_rng.randi_range(0, candidates.size() - 1)]
+	var spacious: bool = candidates.size() >= 12
+	var ranked: Array[Dictionary] = []
+	for cell: Vector2i in candidates:
 		var distance: int = _manhattan(self_state.cell, cell)
-		if distance < 2:
+		if distance < (PATROL_MIN_FLOW_DISTANCE if spacious else 2):
 			continue
-		var score: float = -distance * 1.5
-		if target != null:
-			score -= _manhattan(cell, target.cell) * 2.0
-		if score > best_score:
-			best_score = score
-			best_cell = cell
-	if best_cell == INVALID_CELL:
-		return {}
-	var path: Array[Vector2i] = board.find_path(self_state.cell, best_cell, actor)
-	var plan: AITemporalPlanner.TimedPlan = _timed_plan_from_static_path(path, self_state.move_speed)
-	return {"plan": plan, "cell": best_cell, "score": best_score} if plan.valid else {}
+		ranked.append({
+			"cell": cell,
+			"score": _patrol_flow_score(cell, self_state, target, spacious),
+		})
+	ranked.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		return float(left["score"]) > float(right["score"])
+	)
+	var reverse_fallback: Dictionary = {}
+	for index: int in range(mini(8, ranked.size())):
+		var choice: Dictionary = ranked[index]
+		var choice_cell: Vector2i = choice["cell"] as Vector2i
+		var path: Array[Vector2i] = board.find_path(self_state.cell, choice_cell, actor)
+		var plan: AITemporalPlanner.TimedPlan = _timed_plan_from_static_path(
+			path, self_state.move_speed
+		)
+		if not plan.valid:
+			continue
+		var result: Dictionary = {
+			"plan": plan,
+			"cell": choice_cell,
+			"score": float(choice["score"]),
+			"continuous": true,
+		}
+		if _path_reverses_navigation_heading(path):
+			if reverse_fallback.is_empty():
+				reverse_fallback = result
+			continue
+		return result
+	return reverse_fallback
 
 
 func _commit_pressure_decision(
@@ -755,7 +840,9 @@ func _drop_bomb_and_escape(
 	if mode == Mode.PRESSURING:
 		_pressure_locked_until_ms = _now_ms() + PRESSURE_TARGET_LOCK_MS
 	var updated_snapshot: AIBattleSnapshot = match_controller.build_ai_snapshot()
-	var updated_forecast: AIHazardForecast = AIHazardForecast.build(updated_snapshot, PLANNING_HORIZON_MS)
+	var updated_forecast: AIHazardForecast = match_controller.get_shared_ai_forecast(
+		updated_snapshot, PLANNING_HORIZON_MS
+	)
 	var updated_self: AIBattleSnapshot.ActorState = updated_snapshot.actor_by_id(self_state.instance_id)
 	if updated_self != null:
 		_refresh_pressure_metrics(updated_snapshot, updated_self, updated_forecast)
@@ -788,7 +875,7 @@ func _virtual_drop_is_safe(
 		int(GameConstants.BUBBLE_FUSE_SECONDS * 1000.0),
 		self_state.instance_id
 	)
-	var escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_escape_plan(
+	var escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_direct_escape_plan(
 		snapshot, virtual_forecast, cell, self_state.move_speed, PLANNING_HORIZON_MS
 	)
 	return escape.valid and escape.cells.size() > 1
@@ -805,7 +892,10 @@ func _allies_can_escape(
 			continue
 		if ally.is_dead or ally.is_trapped or ally.cell not in blast:
 			continue
-		var escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_escape_plan(
+		# Ally validation runs inside each pressure candidate. A direct, no-wait
+		# escape is conservative and avoids multiplying the full time-expanded
+		# search by every nearby teammate.
+		var escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_direct_escape_plan(
 			snapshot, forecast, ally.cell, ally.move_speed, PLANNING_HORIZON_MS
 		)
 		if not escape.valid:
@@ -972,6 +1062,53 @@ func _update_enemy_motion(snapshot: AIBattleSnapshot, team_id: int) -> void:
 		_last_enemy_positions[other.instance_id] = other.world_position
 
 
+func _record_navigation_cell(current_cell: Vector2i) -> void:
+	if current_cell == _last_navigation_cell:
+		return
+	if _last_navigation_cell != INVALID_CELL:
+		var movement: Vector2i = current_cell - _last_navigation_cell
+		if absi(movement.x) >= absi(movement.y) and movement.x != 0:
+			_navigation_heading = Vector2i(signi(movement.x), 0)
+		elif movement.y != 0:
+			_navigation_heading = Vector2i(0, signi(movement.y))
+	_recent_navigation_cells.append(current_cell)
+	while _recent_navigation_cells.size() > RECENT_NAVIGATION_CELL_LIMIT:
+		_recent_navigation_cells.pop_front()
+	_last_navigation_cell = current_cell
+
+
+func _patrol_flow_score(
+		cell: Vector2i,
+		self_state: AIBattleSnapshot.ActorState,
+		target: AIBattleSnapshot.ActorState,
+		spacious: bool
+	) -> float:
+	var distance: int = _manhattan(self_state.cell, cell)
+	var desired_distance: int = PATROL_DESIRED_FLOW_DISTANCE if spacious else 3
+	var score: float = -absf(float(distance - desired_distance)) * 5.0
+	if target != null:
+		score -= _manhattan(cell, target.cell) * 1.5
+	if _navigation_heading != Vector2i.ZERO:
+		var offset: Vector2i = cell - self_state.cell
+		var forward_amount: int = offset.x * _navigation_heading.x \
+			+ offset.y * _navigation_heading.y
+		if forward_amount > 0:
+			score += 18.0
+		elif forward_amount < 0:
+			score -= 32.0
+	var recent_index: int = _recent_navigation_cells.find(cell)
+	if recent_index >= 0:
+		score -= 70.0 + recent_index * 4.0
+	return score
+
+
+func _path_reverses_navigation_heading(path: Array[Vector2i]) -> bool:
+	if _navigation_heading == Vector2i.ZERO or path.size() < 2:
+		return false
+	var first_step: Vector2i = path[1] - path[0]
+	return first_step == -_navigation_heading
+
+
 func _has_adjacent_box(snapshot: AIBattleSnapshot, cell: Vector2i) -> bool:
 	for direction: Vector2i in AITemporalPlanner.CARDINAL_DIRECTIONS:
 		var neighbor: Vector2i = cell + direction
@@ -1008,7 +1145,8 @@ func _commit_decision(decision: Dictionary, mode: Mode) -> void:
 		decision["plan"] as AITemporalPlanner.TimedPlan,
 		mode,
 		decision["cell"] as Vector2i,
-		float(decision["score"])
+		float(decision["score"]),
+		bool(decision.get("continuous", false))
 	)
 
 
@@ -1067,20 +1205,29 @@ func _commit_plan(
 		new_plan: AITemporalPlanner.TimedPlan,
 		mode: Mode,
 		target_cell: Vector2i,
-		score: float
+		score: float,
+		continuous_motion: bool = false
 	) -> void:
 	_plan = new_plan
 	_plan_index = 1 if new_plan.cells.size() > 1 else new_plan.cells.size()
 	_plan_started_ms = _now_ms()
+	_continuous_plan_motion = continuous_motion
 	_set_debug(mode, target_cell, score)
 	if mode != Mode.EVADING:
 		_locked_target = target_cell
-		_target_locked_until_ms = _now_ms() + TARGET_LOCK_MS
+		var plan_lock_ms: int = TARGET_LOCK_MS
+		if mode == Mode.PATROLLING:
+			plan_lock_ms = maxi(
+				TARGET_LOCK_MS,
+				new_plan.travel_ms() + AITemporalPlanner.WAIT_STEP_MS * 2
+			)
+		_target_locked_until_ms = _now_ms() + plan_lock_ms
 
 
 func _clear_plan() -> void:
 	_plan = null
 	_plan_index = 0
+	_continuous_plan_motion = false
 	if is_instance_valid(actor):
 		actor.set_ai_direction(Vector2.ZERO)
 

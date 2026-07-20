@@ -17,6 +17,7 @@ var has_exploded: bool = false
 var _sprite: Sprite2D
 var _fuse_timer: Timer
 var _animation_time: float = 0.0
+var _animation_frame: int = 0
 var _exit_actor_ids: Dictionary = {}
 
 func setup(
@@ -56,12 +57,16 @@ func setup(
 func _process(delta: float) -> void:
 	_animation_time += delta
 	var frame: int = int(_animation_time / 0.2) % 3
+	if frame == _animation_frame:
+		return
+	_animation_frame = frame
 	_sprite.region_rect.position.x = frame * 44
 
 func explode_now() -> void:
 	if has_exploded:
 		return
 	has_exploded = true
+	set_process(false)
 	if is_instance_valid(_fuse_timer):
 		_fuse_timer.stop()
 	exploded.emit(self)

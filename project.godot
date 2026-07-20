@@ -2,6 +2,7 @@
 
 config/name="BnBonline Godot"
 run/main_scene="res://scenes/main.tscn"
+run/max_fps=120
 
 [autoload]
 
@@ -15,6 +16,11 @@ window/size/window_width_override=1040
 window/size/window_height_override=600
 window/stretch/mode="canvas_items"
 window/stretch/aspect="keep"
+window/vsync/vsync_mode=0
+
+[physics]
+
+common/physics_interpolation=true
 
 [rendering]
 
@@ -26,4 +32,3 @@ textures/canvas_textures/default_texture_filter=0
 [audio]
 
 driver/output_latency=15
-

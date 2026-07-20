@@ -88,6 +88,22 @@ func _test_ai_hazard_forecast() -> void:
 		forecast.is_unsafe(Vector2i(2, 3), 600, 1050),
 		"blast cell remains unsafe for the full explosion interval"
 	)
+	forecast.set_time_offset_ms(200)
+	_check(forecast.danger_eta_ms(Vector2i(2, 2)) == 400, "cached forecast shifts fuse ETA by its age")
+	_check(
+		forecast.is_unsafe(Vector2i(2, 3), 400, 850),
+		"cached forecast shifts unsafe intervals without rebuilding"
+	)
+	var shifted_field: AIThreatField = AIThreatField.build(forecast, 1)
+	_check(
+		is_equal_approx(shifted_field.weight_at(Vector2i(2, 2)), 1.0),
+		"cached forecast keeps threat expansion aligned to shifted blast time"
+	)
+	forecast.set_time_offset_ms(1100)
+	_check(
+		forecast.danger_eta_ms(Vector2i(2, 2)) == AIHazardForecast.NO_DANGER_MS,
+		"expired cached danger is discarded after its full interval"
+	)
 	var chain_snapshot: AIBattleSnapshot = _empty_ai_snapshot()
 	chain_snapshot.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(2, 2), 3, 500, 1, 0))
 	chain_snapshot.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(5, 2), 2, 2400, 2, 1))

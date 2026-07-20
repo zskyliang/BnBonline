@@ -18,6 +18,19 @@ func _run() -> void:
 	await process_frame
 	_assert(match_node.get_actors().size() == match_node.settings.ai_count + 1, "configured fighters spawned")
 	_assert(match_node.board.cells.size() == 13, "map initialized")
+	_assert(
+		match_node.board._visual_root.get_child_count() < GameConstants.GRID_COLUMNS * GameConstants.GRID_ROWS,
+		"static ground uses batched drawing instead of one node per tile"
+	)
+	_assert(
+		match_node._arena_timer_label.position.y <= 34.0 \
+			and match_node._arena_timer_label.position.y + match_node._arena_timer_label.size.y <= 58.0,
+		"arena timer stays inside the time header"
+	)
+	_assert(
+		match_node._fps_label.position.y <= 4.0 and match_node._fps_label.text.begins_with("FPS:"),
+		"FPS counter is shown on the map-name row"
+	)
 	var player: GameActor = match_node.get_player()
 	_assert(is_instance_valid(player), "player spawned")
 	_assert(InputMap.has_action("move_left") and InputMap.has_action("place_bomb"), "semantic input actions registered")
@@ -80,22 +93,23 @@ func _run() -> void:
 	var half_safe_effect := ExplosionEffect.new()
 	match_node._effect_root.add_child(half_safe_effect)
 	half_safe_effect.setup([Vector2i(0, 1)], Vector2i(0, 1), player)
-	match_node._active_explosions.append(half_safe_effect)
+	_assert(half_safe_effect.get_child_count() == 0, "explosion cells use batched drawing")
+	match_node.call("_register_explosion_effect", half_safe_effect)
 	match_node.call("_resolve_explosion_hits")
 	match_node.call("_resolve_explosion_hits")
 	_assert(not player.stats.is_trapped, "one-foot explosion coverage keeps the player half-body safe")
-	match_node._active_explosions.erase(half_safe_effect)
+	match_node.call("_unregister_explosion_effect", half_safe_effect)
 	half_safe_effect.queue_free()
 	var full_hit_effect := ExplosionEffect.new()
 	match_node._effect_root.add_child(full_hit_effect)
 	full_hit_effect.setup([Vector2i(0, 1), Vector2i(1, 1)], Vector2i(0, 1), player)
-	match_node._active_explosions.append(full_hit_effect)
+	match_node.call("_register_explosion_effect", full_hit_effect)
 	match_node.call("_resolve_explosion_hits")
 	_assert(not player.stats.is_trapped, "first full-body unsafe frame does not trap")
 	match_node.call("_resolve_explosion_hits")
 	_assert(player.stats.is_trapped, "two full-body unsafe frames trap in the live match")
 	player.rescue()
-	match_node._active_explosions.erase(full_hit_effect)
+	match_node.call("_unregister_explosion_effect", full_hit_effect)
 	full_hit_effect.queue_free()
 	var ai_actor: GameActor
 	for battle_actor: GameActor in match_node.get_actors():

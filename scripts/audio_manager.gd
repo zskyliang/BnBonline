@@ -13,9 +13,11 @@ const STREAMS: Dictionary = {
 	&"draw": preload("res://assets/audio/draw.wav"),
 }
 const MUSIC: AudioStream = preload("res://assets/audio/bg.wav")
+const SFX_POOL_SIZE: int = 12
 
 var _music_player: AudioStreamPlayer
 var _sfx_players: Array[AudioStreamPlayer] = []
+var _next_sfx_player: int = 0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -25,6 +27,11 @@ func _ready() -> void:
 	_music_player.process_mode = Node.PROCESS_MODE_ALWAYS
 	_music_player.finished.connect(play_music)
 	add_child(_music_player)
+	for _index: int in range(SFX_POOL_SIZE):
+		var player := AudioStreamPlayer.new()
+		player.process_mode = Node.PROCESS_MODE_ALWAYS
+		add_child(player)
+		_sfx_players.append(player)
 
 func play_music() -> void:
 	if not _music_player.playing:
@@ -38,23 +45,26 @@ func stop_all() -> void:
 	for player: AudioStreamPlayer in _sfx_players:
 		if is_instance_valid(player):
 			player.stop()
-			player.queue_free()
-	_sfx_players.clear()
 
 func play_sfx(sound_name: StringName, volume_db: float = -3.0) -> void:
 	if not STREAMS.has(sound_name):
 		return
-	var player := AudioStreamPlayer.new()
+	var player: AudioStreamPlayer = _acquire_sfx_player()
 	player.stream = STREAMS[sound_name] as AudioStream
 	player.volume_db = volume_db
-	player.finished.connect(_on_sfx_finished.bind(player))
-	add_child(player)
-	_sfx_players.append(player)
 	player.play()
 
-func _on_sfx_finished(player: AudioStreamPlayer) -> void:
-	_sfx_players.erase(player)
-	player.queue_free()
+func _acquire_sfx_player() -> AudioStreamPlayer:
+	for offset: int in range(_sfx_players.size()):
+		var index: int = (_next_sfx_player + offset) % _sfx_players.size()
+		var candidate: AudioStreamPlayer = _sfx_players[index]
+		if not candidate.playing:
+			_next_sfx_player = (index + 1) % _sfx_players.size()
+			return candidate
+	var player: AudioStreamPlayer = _sfx_players[_next_sfx_player]
+	_next_sfx_player = (_next_sfx_player + 1) % _sfx_players.size()
+	player.stop()
+	return player
 
 func _exit_tree() -> void:
 	stop_all()
