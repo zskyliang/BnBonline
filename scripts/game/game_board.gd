@@ -4,50 +4,42 @@ extends Node2D
 
 signal cell_changed(cell: Vector2i, new_code: int)
 signal hazard_changed
-
-const BACKGROUND_TEXTURE: Texture2D = preload("res://assets/sprites/BG.png")
-const TOWN_GROUND_TEXTURE: Texture2D = preload("res://assets/sprites/TownGround.png")
-const HEART_GROUND_TEXTURE: Texture2D = preload("res://assets/sprites/MapType2.png")
-const BLOCK_RED_TEXTURE: Texture2D = preload("res://assets/sprites/TownBlockRed.png")
-const BLOCK_YELLOW_TEXTURE: Texture2D = preload("res://assets/sprites/TownBlockYellow.png")
-const BOX_TEXTURE: Texture2D = preload("res://assets/sprites/TownBox.png")
-const SAND_BLOCK_TEXTURE: Texture2D = preload("res://assets/sprites/SandBlockYellow.png")
-const WINDMILL_BASE_TEXTURE: Texture2D = preload("res://assets/sprites/TownWindmill.png")
-const WINDMILL_FAN_TEXTURE: Texture2D = preload("res://assets/sprites/TownWindmillAni.png")
-const WINDMILL_COLLISION_ROW_OFFSET: int = 3
-const GIFT_TEXTURES: Dictionary = {
-	GameConstants.ITEM_BUBBLE: preload("res://assets/sprites/Gift1.png"),
-	GameConstants.ITEM_SPEED: preload("res://assets/sprites/Gift2.png"),
-	GameConstants.ITEM_POWER: preload("res://assets/sprites/Gift3.png"),
-}
+signal board_reset
 
 var map_data: MapData
 var cells: Array[PackedInt32Array] = []
 var bombs: Dictionary = {}
 
+## Compatibility-only depth metadata used by legacy rule tests. These nodes
+## have no texture and live under the hidden 2D logic world.
 var _visual_root: Node2D
 var _cell_sprites: Dictionary = {}
-var _item_sprites: Dictionary = {}
 var _rng := RandomNumberGenerator.new()
 
 func _init() -> void:
 	_rng.randomize()
-	texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 
 func reset(new_map_data: MapData) -> void:
 	map_data = new_map_data
 	cells = MapCatalog.clone_matrix(map_data.barrier_cells)
 	bombs.clear()
 	_cell_sprites.clear()
-	_item_sprites.clear()
 	if is_instance_valid(_visual_root):
 		_visual_root.queue_free()
 	_visual_root = Node2D.new()
-	_visual_root.name = "MapVisuals"
+	_visual_root.name = "DepthMetadata"
 	add_child(_visual_root)
-	queue_redraw()
-	_draw_barriers()
-	_draw_decorations()
+	for y in range(GameConstants.GRID_ROWS):
+		for x in range(GameConstants.GRID_COLUMNS):
+			var code: int = cells[y][x]
+			if code <= 0 or code >= 100 or code == 9:
+				continue
+			var cell := Vector2i(x, y)
+			var depth_marker := Sprite2D.new()
+			depth_marker.z_index = 40 + int(GameConstants.grid_to_world(cell).y)
+			_visual_root.add_child(depth_marker)
+			_cell_sprites[cell] = depth_marker
+	board_reset.emit()
 	hazard_changed.emit()
 
 func cell_code(cell: Vector2i) -> int:
@@ -184,11 +176,6 @@ func take_item(cell: Vector2i) -> int:
 	if code < 101:
 		return 0
 	cells[cell.y][cell.x] = 0
-	if _item_sprites.has(cell):
-		var sprite: Node = _item_sprites[cell] as Node
-		if is_instance_valid(sprite):
-			sprite.queue_free()
-		_item_sprites.erase(cell)
 	cell_changed.emit(cell, 0)
 	return code
 
@@ -196,13 +183,11 @@ func destroy_cell(cell: Vector2i) -> int:
 	var code: int = cell_code(cell)
 	if not GameRules.is_destructible(code):
 		return 0
-	_remove_cell_sprite(cell)
 	var item_codes: PackedInt32Array = PackedInt32Array([
 		GameConstants.ITEM_BUBBLE, GameConstants.ITEM_SPEED, GameConstants.ITEM_POWER,
 	])
 	var item_code: int = item_codes[_rng.randi_range(0, item_codes.size() - 1)]
 	cells[cell.y][cell.x] = item_code
-	_draw_item(cell, item_code)
 	cell_changed.emit(cell, item_code)
 	hazard_changed.emit()
 	return item_code
@@ -250,104 +235,3 @@ func find_path(from_cell: Vector2i, to_cell: Vector2i, actor: GameActor = null) 
 
 func predicted_blast(cell: Vector2i, power: int) -> Array[Vector2i]:
 	return GameRules.blast_cells(cell, power, cells)
-
-func _draw() -> void:
-	draw_texture(BACKGROUND_TEXTURE, Vector2.ZERO)
-	for y: int in range(GameConstants.GRID_ROWS):
-		for x: int in range(GameConstants.GRID_COLUMNS):
-			var cell := Vector2i(x, y)
-			var rect: Rect2
-			var texture: Texture2D
-			if map_data.ground_mode == "maptype2":
-				texture = HEART_GROUND_TEXTURE
-				rect = Rect2(1, 1, 16, 16)
-			else:
-				texture = TOWN_GROUND_TEXTURE
-				rect = Rect2((map_data.ground_cells[y][x] - 1) * 40, 0, 40, 40)
-			draw_texture_rect_region(
-				texture,
-				Rect2(GameConstants.grid_to_top_left(cell), Vector2(40, 40)),
-				rect
-			)
-
-func _draw_barriers() -> void:
-	for y: int in range(GameConstants.GRID_ROWS):
-		for x: int in range(GameConstants.GRID_COLUMNS):
-			var cell := Vector2i(x, y)
-			var code: int = cells[y][x]
-			if code > 0 and code < 100 and code != 9:
-				_draw_barrier(cell, code)
-
-func _draw_barrier(cell: Vector2i, code: int) -> void:
-	var texture: Texture2D = BOX_TEXTURE
-	if code == 1:
-		texture = BLOCK_RED_TEXTURE
-	elif code == 2:
-		texture = BLOCK_YELLOW_TEXTURE
-	elif code == 8:
-		texture = SAND_BLOCK_TEXTURE
-	var sprite := Sprite2D.new()
-	sprite.texture = texture
-	sprite.centered = false
-	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	sprite.position = GameConstants.grid_to_top_left(cell) + Vector2(0, -4)
-	sprite.z_index = 40 + int(GameConstants.grid_to_world(cell).y)
-	_visual_root.add_child(sprite)
-	_cell_sprites[cell] = sprite
-
-func _draw_item(cell: Vector2i, code: int) -> void:
-	if not GIFT_TEXTURES.has(code):
-		return
-	var texture: Texture2D = GIFT_TEXTURES[code] as Texture2D
-	var sprite: Sprite2D = _make_region_sprite(
-		texture, Rect2(0, 0, 42, 45),
-		GameConstants.grid_to_top_left(cell) + Vector2(-1, -7), Vector2(42, 45)
-	)
-	sprite.z_index = 25 + cell.y * 2
-	_visual_root.add_child(sprite)
-	_item_sprites[cell] = sprite
-
-func _draw_decorations() -> void:
-	for decoration: Dictionary in map_data.decorations:
-		if decoration.get("type", "") != "windmill":
-			continue
-		var cell: Vector2i = decoration.get("cell", Vector2i.ZERO)
-		var top_left: Vector2 = GameConstants.grid_to_top_left(cell)
-		var collision_row: int = mini(GameConstants.GRID_ROWS - 1, cell.y + WINDMILL_COLLISION_ROW_OFFSET)
-		var decoration_depth: int = 40 + int(GameConstants.grid_to_world(Vector2i(cell.x, collision_row)).y)
-		var fan: Sprite2D = _make_region_sprite(
-			WINDMILL_FAN_TEXTURE, Rect2(0, 0, 120, 118), top_left, Vector2(120, 118)
-		)
-		fan.z_index = decoration_depth
-		_visual_root.add_child(fan)
-		var base := Sprite2D.new()
-		base.texture = WINDMILL_BASE_TEXTURE
-		base.centered = false
-		base.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-		base.position = top_left + Vector2(0, 118)
-		base.z_index = decoration_depth
-		_visual_root.add_child(base)
-
-func _remove_cell_sprite(cell: Vector2i) -> void:
-	if not _cell_sprites.has(cell):
-		return
-	var sprite: Node = _cell_sprites[cell] as Node
-	if is_instance_valid(sprite):
-		sprite.queue_free()
-	_cell_sprites.erase(cell)
-
-func _make_region_sprite(
-		texture: Texture2D,
-		region: Rect2,
-		top_left: Vector2,
-		draw_size: Vector2
-	) -> Sprite2D:
-	var sprite := Sprite2D.new()
-	sprite.texture = texture
-	sprite.region_enabled = true
-	sprite.region_rect = region
-	sprite.centered = false
-	sprite.position = top_left
-	sprite.scale = draw_size / region.size
-	sprite.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
-	return sprite

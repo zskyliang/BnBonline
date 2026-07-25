@@ -21,15 +21,19 @@ func _run() -> void:
 	quit(1 if _failures > 0 else 0)
 
 func _test_map_catalog() -> void:
-	var classic: MapData = MapCatalog.get_map("classic")
-	_check(classic.ground_cells.size() == 13, "classic has 13 rows")
-	_check(classic.ground_cells[0].size() == 15, "classic has 15 columns")
-	_check(classic.player_spawn == Vector2i.ZERO, "classic spawn retained")
-	_check(classic.barrier_cells[0][3] == 3, "classic houses become destructible boxes")
-	var heart: MapData = MapCatalog.get_map("windmill-heart")
-	_check(heart.player_spawn == Vector2i(1, 1), "heart spawn retained")
-	_check(heart.barrier_cells[6][7] == 9, "windmill base is rigid")
-	_check(heart.barrier_cells[0][0] == 8, "heart border is destructible")
+	var harbor := MapCatalog.get_map(MapCatalog.HARBOR_MARKET)
+	var garden := MapCatalog.get_map(MapCatalog.BELL_GARDEN)
+	for map_data: MapData in [harbor, garden]:
+		_check(map_data.barrier_cells.size() == 13, "%s has 13 rows" % map_data.map_id)
+		_check(map_data.barrier_cells[0].size() == 15, "%s has 15 columns" % map_data.map_id)
+		_check(map_data.player_spawn == Vector2i(1, 11), "%s keeps the approved spawn" % map_data.map_id)
+		_check(map_data.barrier_cells[0][0] == 9, "%s uses a solid shoreline border" % map_data.map_id)
+		_check(_building_cells(map_data) == _cells_with_code(map_data, 1), "%s building footprints match rigid cells" % map_data.map_id)
+		_check(_all_play_cells_connected(map_data), "%s becomes fully connected after stalls are removed" % map_data.map_id)
+	_check(MapCatalog.count_code(harbor, 3) == 28, "harbor market has 28 destructible stalls")
+	_check(MapCatalog.count_code(garden, 3) == 23, "bell garden has 23 destructible stalls")
+	_check(MapCatalog.get_map("classic").map_id == MapCatalog.HARBOR_MARKET, "classic migrates to harbor market")
+	_check(MapCatalog.get_map("windmill-heart").map_id == MapCatalog.BELL_GARDEN, "windmill heart migrates to bell garden")
 
 func _test_settings_bounds() -> void:
 	var settings := MatchSettings.new()
@@ -40,12 +44,12 @@ func _test_settings_bounds() -> void:
 	settings.max_power = 1
 	settings.bubble_skin = "missing"
 	settings.normalize()
-	_check(settings.map_id == "classic", "invalid map falls back")
+	_check(settings.map_id == MapCatalog.HARBOR_MARKET, "invalid map falls back")
 	_check(settings.ai_count == 4, "AI count clamps to four")
 	_check(settings.max_speed == 150, "speed cap clamps to initial speed")
 	_check(settings.max_bubbles == 20, "bubble cap clamps to twenty")
 	_check(settings.max_power == 2, "power cap clamps to initial power")
-	_check(settings.bubble_skin == "football", "invalid skin falls back")
+	_check(settings.bubble_skin == "aqua", "invalid skin falls back")
 
 func _test_blast_propagation() -> void:
 	var cells: Array[PackedInt32Array] = []
@@ -244,49 +248,51 @@ func _empty_ai_snapshot(fill_code: int = 0) -> AIBattleSnapshot:
 func _test_board_actor_and_items() -> void:
 	var board := GameBoard.new()
 	root.add_child(board)
-	board.reset(MapCatalog.get_map("classic"))
+	board.reset(MapCatalog.get_map(MapCatalog.HARBOR_MARKET))
 	var settings := MatchSettings.new()
 	var actor := GameActor.new()
 	root.add_child(actor)
-	actor.setup("测试玩家", 1, true, board, settings, Vector2i.ZERO)
-	_check(board.can_actor_occupy(GameConstants.grid_to_world(Vector2i.ZERO), actor), "actor can occupy spawn")
-	_check(not board.can_actor_occupy(GameConstants.grid_to_world(Vector2i(1, 0)), actor), "actor cannot occupy a box")
-	var item_code: int = board.destroy_cell(Vector2i(1, 0))
+	var spawn := Vector2i(1, 11)
+	var destructible := Vector2i(4, 11)
+	actor.setup("测试玩家", 1, true, board, settings, spawn)
+	_check(board.can_actor_occupy(GameConstants.grid_to_world(spawn), actor), "actor can occupy spawn")
+	_check(not board.can_actor_occupy(GameConstants.grid_to_world(destructible), actor), "actor cannot occupy a stall")
+	var item_code: int = board.destroy_cell(destructible)
 	_check(item_code in [101, 102, 103], "destroyed box creates a valid upgrade")
-	_check(board.take_item(Vector2i(1, 0)) == item_code, "upgrade can be collected")
-	_check(board.cell_code(Vector2i(1, 0)) == 0, "collected upgrade clears the cell")
+	_check(board.take_item(destructible) == item_code, "upgrade can be collected")
+	_check(board.cell_code(destructible) == 0, "collected upgrade clears the cell")
 	var bubble := GameBubble.new()
 	root.add_child(bubble)
 	var overlapping_actor := GameActor.new()
 	root.add_child(overlapping_actor)
-	overlapping_actor.setup("重叠角色", 2, false, board, settings, Vector2i.ZERO)
+	overlapping_actor.setup("重叠角色", 2, false, board, settings, spawn)
 	var outside_actor := GameActor.new()
 	root.add_child(outside_actor)
-	outside_actor.setup("外部角色", 2, false, board, settings, Vector2i(0, 1))
-	bubble.setup(actor, Vector2i.ZERO, "football", GameConstants.BUBBLE_FUSE_SECONDS, [actor, overlapping_actor])
+	outside_actor.setup("外部角色", 2, false, board, settings, Vector2i(1, 10))
+	bubble.setup(actor, spawn, "aqua", GameConstants.BUBBLE_FUSE_SECONDS, [actor, overlapping_actor])
 	board.register_bubble(bubble)
-	overlapping_actor.position = GameConstants.grid_to_world(Vector2i.ZERO) + Vector2(0.0, 21.0)
+	overlapping_actor.position = GameConstants.grid_to_world(spawn) + Vector2(0.0, -21.0)
 	_check(
-		board.can_actor_occupy(overlapping_actor.position + Vector2(0.0, 3.0), overlapping_actor),
+		board.can_actor_occupy(overlapping_actor.position + Vector2(0.0, -3.0), overlapping_actor),
 		"another actor overlapping a newly placed bubble can finish exiting"
 	)
-	overlapping_actor.position = GameConstants.grid_to_world(Vector2i(0, 1))
+	overlapping_actor.position = GameConstants.grid_to_world(Vector2i(1, 10))
 	_check(
-		not board.can_actor_occupy(overlapping_actor.position + Vector2(0.0, -14.0), overlapping_actor),
+		not board.can_actor_occupy(overlapping_actor.position + Vector2(0.0, 14.0), overlapping_actor),
 		"overlapping actor cannot re-enter after fully clearing the bubble cell"
 	)
 	_check(
-		not board.can_actor_occupy(outside_actor.position + Vector2(0.0, -14.0), outside_actor),
+		not board.can_actor_occupy(outside_actor.position + Vector2(0.0, 14.0), outside_actor),
 		"actor outside at placement is blocked immediately"
 	)
-	actor.position = GameConstants.grid_to_world(Vector2i.ZERO) + Vector2(0.0, 21.0)
+	actor.position = GameConstants.grid_to_world(spawn) + Vector2(0.0, -21.0)
 	_check(
-		board.can_actor_occupy(actor.position + Vector2(0.0, 3.0), actor),
+		board.can_actor_occupy(actor.position + Vector2(0.0, -3.0), actor),
 		"bubble owner can keep moving while its body still overlaps the placed bubble"
 	)
-	actor.position = GameConstants.grid_to_world(Vector2i(0, 1))
+	actor.position = GameConstants.grid_to_world(Vector2i(1, 10))
 	_check(
-		not board.can_actor_occupy(actor.position + Vector2(0.0, -14.0), actor),
+		not board.can_actor_occupy(actor.position + Vector2(0.0, 14.0), actor),
 		"bubble owner cannot re-enter after fully leaving the placed bubble"
 	)
 	board.unregister_bubble(bubble)
@@ -297,7 +303,7 @@ func _test_board_actor_and_items() -> void:
 	_check(actor.stats.is_trapped, "two consecutive unsafe frames trap")
 	actor.rescue()
 	_check(not actor.stats.is_trapped, "self rescue clears trap")
-	var path: Array[Vector2i] = board.find_path(Vector2i.ZERO, Vector2i(1, 1), actor)
+	var path: Array[Vector2i] = board.find_path(spawn, Vector2i(2, 10), actor)
 	_check(path.size() >= 2, "AStarGrid2D finds a route through open cells")
 	actor.queue_free()
 	overlapping_actor.queue_free()
@@ -412,18 +418,50 @@ func _test_rigid_boundaries_and_depth() -> void:
 		absf(actor.position.y - (rigid_bottom + 20.0)) < 0.05,
 		"blocked upward movement resolves to the exact rigid boundary"
 	)
-	board.reset(MapCatalog.get_map("classic"))
-	var depth_cell := Vector2i(0, 2)
+	board.reset(MapCatalog.get_map(MapCatalog.HARBOR_MARKET))
+	var depth_cell := Vector2i(3, 1)
 	var depth_sprite: Sprite2D = board._cell_sprites[depth_cell] as Sprite2D
-	actor.position = GameConstants.grid_to_world(Vector2i(0, 1))
+	actor.position = GameConstants.grid_to_world(Vector2i(3, 0))
 	actor.call("_process", 0.0)
 	_check(depth_sprite.z_index > actor.z_index, "rigid body covers an actor standing behind it")
-	actor.position = GameConstants.grid_to_world(Vector2i(0, 3))
+	actor.position = GameConstants.grid_to_world(Vector2i(3, 2))
 	actor.call("_process", 0.0)
 	_check(actor.z_index > depth_sprite.z_index, "actor covers a rigid body when standing in front of it")
 	actor.queue_free()
 	board.queue_free()
 	await process_frame
+
+func _cells_with_code(map_data: MapData, code: int) -> Dictionary:
+	var result: Dictionary = {}
+	for y: int in range(GameConstants.GRID_ROWS):
+		for x: int in range(GameConstants.GRID_COLUMNS):
+			if map_data.barrier_cells[y][x] == code:
+				result[Vector2i(x, y)] = true
+	return result
+
+func _building_cells(map_data: MapData) -> Dictionary:
+	var result: Dictionary = {}
+	for placement: BuildingPlacement in map_data.building_units:
+		for cell: Vector2i in placement.covered_cells():
+			result[cell] = true
+	return result
+
+func _all_play_cells_connected(map_data: MapData) -> bool:
+	var target: Dictionary = {}
+	for y: int in range(GameConstants.GRID_ROWS):
+		for x: int in range(GameConstants.GRID_COLUMNS):
+			if map_data.barrier_cells[y][x] in [0, 3]:
+				target[Vector2i(x, y)] = true
+	var reached: Dictionary = {map_data.player_spawn: true}
+	var frontier: Array[Vector2i] = [map_data.player_spawn]
+	while not frontier.is_empty():
+		var cell: Vector2i = frontier.pop_front()
+		for direction: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+			var next := cell + direction
+			if target.has(next) and not reached.has(next):
+				reached[next] = true
+				frontier.append(next)
+	return reached.size() == target.size()
 
 func _check(condition: bool, description: String) -> void:
 	_checks += 1

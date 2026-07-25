@@ -2,15 +2,23 @@ class_name MatchController
 extends Node
 ## Root match orchestrator for spawning, scoring, explosions, settings, and round flow.
 
+signal match_finished(results: Array[Dictionary])
+signal scores_changed(entries: Array[Dictionary])
+signal time_changed(seconds: int)
+
+enum AppState { LOBBY, SETUP, MATCH, RESULT }
+
 var settings: MatchSettings
 var board: GameBoard
 var hud: GameHud
 var _arena_timer_label: Label
 var _fps_label: Label
+var app_state: AppState = AppState.LOBBY
 
 var _world: Node2D
 var _entity_root: Node2D
 var _effect_root: Node2D
+var _arena_view: ArenaView3D
 var _actors: Array[GameActor] = []
 var _ai_controllers: Array[RuleAI] = []
 var _active_explosions: Array[ExplosionEffect] = []
@@ -33,6 +41,7 @@ var _cached_ai_forecast_horizon_ms: int = 0
 var _cached_ai_forecast_built_ms: int = 0
 var _ai_hazard_revision: int = 0
 var _cached_ai_hazard_revision: int = -1
+var _current_ai_character_ids: Array[String] = []
 
 const AI_FORECAST_CACHE_MS: int = 60
 
@@ -42,8 +51,14 @@ func _ready() -> void:
 	_ensure_input_actions()
 	settings = MatchSettings.load_from_disk()
 	_build_scene_tree()
+	var web_adapter := WebPlatformAdapter.new()
+	web_adapter.name = "WebPlatformAdapter"
+	add_child(web_adapter)
 	_connect_hud()
-	start_match()
+	if DisplayServer.get_name() == "headless":
+		start_match()
+	else:
+		_enter_lobby()
 
 func _physics_process(delta: float) -> void:
 	if _round_over or _is_paused:
@@ -62,8 +77,11 @@ func _process(_delta: float) -> void:
 	if now_ms - _last_fps_update_ms < 250:
 		return
 	_last_fps_update_ms = now_ms
-	if is_instance_valid(_fps_label):
-		_fps_label.text = "FPS: %d" % Engine.get_frames_per_second()
+	if is_instance_valid(hud):
+		var fps := Engine.get_frames_per_second()
+		hud.update_fps(fps)
+		_fps_label.text = "FPS: %d" % fps
+		hud.update_player_stats(_player)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause_game") and not _round_over:
@@ -72,24 +90,89 @@ func _unhandled_input(event: InputEvent) -> void:
 		else:
 			_pause_match()
 		get_viewport().set_input_as_handled()
+		return
+	if app_state != AppState.MATCH or _round_over or _is_paused:
+		return
+	if event.is_action_pressed("zoom_in"):
+		_arena_view.zoom_in()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("zoom_out"):
+		_arena_view.zoom_out()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("zoom_reset"):
+		_arena_view.reset_zoom()
+		get_viewport().set_input_as_handled()
 
-func start_match() -> void:
+func start_match(
+		new_settings: MatchSettings = null,
+		ai_character_ids: Array[String] = []
+	) -> void:
+	if new_settings != null:
+		settings = new_settings
+	settings.normalize()
+	if not ai_character_ids.is_empty():
+		_current_ai_character_ids = ai_character_ids.duplicate()
+	if _current_ai_character_ids.size() != settings.ai_count:
+		_current_ai_character_ids = CharacterCatalog.assign_ai_characters(
+			settings.character_id,
+			settings.ai_count,
+			_rng
+		)
 	get_tree().paused = false
 	_is_paused = false
 	_round_over = false
+	app_state = AppState.MATCH
 	_remaining_seconds = GameConstants.ROUND_SECONDS
 	_simulation_time_ms = 0.0
 	_displayed_seconds = -1
 	_clear_match_nodes()
 	board.reset(MapCatalog.get_map(settings.map_id))
+	_arena_view.fit_camera(board.map_data)
 	_spawn_fighters()
+	_arena_view.visible = true
 	hud.sync_settings(settings)
+	hud.show_match()
 	hud.hide_pause()
 	hud.hide_result()
 	_update_time_display()
 	_update_scoreboard()
 	_audio_call(&"play_sfx", [&"start"])
 	_audio_call(&"play_music")
+
+
+func _enter_lobby() -> void:
+	get_tree().paused = false
+	_round_over = true
+	_is_paused = false
+	app_state = AppState.LOBBY
+	_current_ai_character_ids.clear()
+	_arena_view.visible = false
+	hud.show_lobby()
+	_audio_call(&"stop_music")
+
+
+func _enter_setup() -> void:
+	get_tree().paused = false
+	_round_over = true
+	_is_paused = false
+	app_state = AppState.SETUP
+	_arena_view.visible = false
+	hud.show_setup(settings)
+
+
+func _on_match_requested(configuration: Dictionary) -> void:
+	settings.apply_dictionary(configuration)
+	settings.save_to_disk()
+	_current_ai_character_ids = CharacterCatalog.assign_ai_characters(
+		settings.character_id,
+		settings.ai_count,
+		_rng
+	)
+	start_match(settings, _current_ai_character_ids)
+
+
+func _quit_game() -> void:
+	get_tree().quit()
 
 func danger_eta_ms(cell: Vector2i) -> int:
 	return build_ai_forecast().danger_eta_ms(cell)
@@ -208,13 +291,18 @@ func request_bomb(actor: GameActor) -> bool:
 	)
 	bubble.exploded.connect(_on_bubble_exploded)
 	board.register_bubble(bubble)
+	_arena_view.add_bubble(bubble)
 	actor.stats.active_bubbles += 1
 	_audio_call(&"play_sfx", [&"lay"])
 	return true
 
 func _build_scene_tree() -> void:
+	_arena_view = ArenaView3D.new()
+	_arena_view.name = "ArenaView3D"
+	add_child(_arena_view)
 	_world = Node2D.new()
-	_world.name = "GameWorld"
+	_world.name = "LogicWorld2D"
+	_world.visible = false
 	add_child(_world)
 	board = GameBoard.new()
 	board.name = "Board"
@@ -226,31 +314,7 @@ func _build_scene_tree() -> void:
 	_effect_root = Node2D.new()
 	_effect_root.name = "Effects"
 	_world.add_child(_effect_root)
-	var chrome := CanvasLayer.new()
-	chrome.name = "GameChrome"
-	chrome.layer = 5
-	add_child(chrome)
-	_arena_timer_label = Label.new()
-	_arena_timer_label.position = Vector2(694, 33)
-	_arena_timer_label.size = Vector2(92, 24)
-	_arena_timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_arena_timer_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_arena_timer_label.add_theme_font_size_override("font_size", 16)
-	_arena_timer_label.add_theme_color_override("font_color", Color("ffe36e"))
-	_arena_timer_label.add_theme_constant_override("outline_size", 3)
-	_arena_timer_label.add_theme_color_override("font_outline_color", Color("103657"))
-	chrome.add_child(_arena_timer_label)
-	_fps_label = Label.new()
-	_fps_label.position = Vector2(655, 1)
-	_fps_label.size = Vector2(125, 24)
-	_fps_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	_fps_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	_fps_label.add_theme_font_size_override("font_size", 14)
-	_fps_label.add_theme_color_override("font_color", Color("b8f4cf"))
-	_fps_label.add_theme_constant_override("outline_size", 3)
-	_fps_label.add_theme_color_override("font_outline_color", Color("103657"))
-	_fps_label.text = "FPS: 0"
-	chrome.add_child(_fps_label)
+	_arena_view.bind_board(board)
 	var canvas := CanvasLayer.new()
 	canvas.name = "Interface"
 	canvas.layer = 20
@@ -258,17 +322,26 @@ func _build_scene_tree() -> void:
 	hud = GameHud.new()
 	hud.name = "HUD"
 	canvas.add_child(hud)
+	_arena_timer_label = hud.timer_label
+	# Kept as a non-rendered compatibility probe for the existing smoke suite.
+	_fps_label = Label.new()
+	_fps_label.position = Vector2.ZERO
+	_fps_label.text = "FPS: 0"
+	_fps_label.visible = false
+	canvas.add_child(_fps_label)
 
 func _connect_hud() -> void:
-	hud.map_selected.connect(_on_map_selected)
-	hud.ai_count_selected.connect(_on_ai_count_selected)
-	hud.max_speed_changed.connect(_on_max_speed_changed)
-	hud.max_bubbles_changed.connect(_on_max_bubbles_changed)
-	hud.max_power_changed.connect(_on_max_power_changed)
-	hud.bubble_skin_selected.connect(_on_bubble_skin_selected)
+	hud.setup_requested.connect(_enter_setup)
+	hud.match_requested.connect(_on_match_requested)
 	hud.resume_requested.connect(_resume_match)
 	hud.restart_requested.connect(start_match)
-	hud.quit_requested.connect(get_tree().quit)
+	hud.lobby_requested.connect(_enter_lobby)
+	hud.quit_requested.connect(_quit_game)
+	hud.zoom_in_requested.connect(_arena_view.zoom_in)
+	hud.zoom_out_requested.connect(_arena_view.zoom_out)
+	hud.zoom_reset_requested.connect(_arena_view.reset_zoom)
+	_arena_view.zoom_changed.connect(hud.update_zoom)
+	hud.update_zoom(_arena_view.get_zoom_percent())
 
 func _clear_match_nodes() -> void:
 	_active_explosions.clear()
@@ -281,6 +354,7 @@ func _clear_match_nodes() -> void:
 	_scores.clear()
 	_ai_item_claims.clear()
 	_player = null
+	_arena_view.clear_entities()
 	for child: Node in _entity_root.get_children():
 		child.queue_free()
 	for child: Node in _effect_root.get_children():
@@ -288,12 +362,26 @@ func _clear_match_nodes() -> void:
 
 func _spawn_fighters() -> void:
 	var used_cells: Array[Vector2i] = []
-	_player = _spawn_actor("玩家", 1, true, board.map_data.player_spawn)
+	var player_character := CharacterCatalog.get_definition(settings.character_id)
+	_player = _spawn_actor(
+		"玩家",
+		1,
+		true,
+		board.map_data.player_spawn,
+		player_character.id
+	)
 	used_cells.append(board.map_data.player_spawn)
 	for index: int in range(settings.ai_count):
 		var spawn: Vector2i = _find_ai_spawn(used_cells)
 		used_cells.append(spawn)
-		var ai_actor: GameActor = _spawn_actor("AI %d" % (index + 1), 2, false, spawn)
+		var ai_character_id := _current_ai_character_ids[index]
+		var ai_actor: GameActor = _spawn_actor(
+			"AI %d" % (index + 1),
+			2,
+			false,
+			spawn,
+			ai_character_id
+		)
 		var controller := RuleAI.new()
 		controller.name = "RuleAI%d" % (index + 1)
 		ai_actor.add_child(controller)
@@ -332,18 +420,25 @@ func _spawn_actor(
 		display_name: String,
 		team_id: int,
 		is_player_actor: bool,
-		spawn_cell: Vector2i
+		spawn_cell: Vector2i,
+		character_id: String = "builder"
 	) -> GameActor:
 	var actor := GameActor.new()
 	actor.name = display_name
 	_entity_root.add_child(actor)
 	actor.setup(display_name, team_id, is_player_actor, board, settings, spawn_cell)
+	actor.character_id = character_id
 	actor.bomb_requested.connect(_on_bomb_requested)
 	actor.died.connect(_on_actor_died)
 	actor.rescued.connect(_on_actor_rescued)
 	actor.item_collected.connect(_on_item_collected)
 	_actors.append(actor)
-	_scores[actor.get_instance_id()] = {"name": display_name, "kills": 0}
+	_scores[actor.get_instance_id()] = {
+		"name": display_name,
+		"kills": 0,
+		"character_id": character_id,
+	}
+	_arena_view.add_actor(actor, character_id)
 	return actor
 
 func _find_ai_spawn(used_cells: Array[Vector2i]) -> Vector2i:
@@ -383,6 +478,7 @@ func _on_bubble_exploded(bubble: GameBubble) -> void:
 	var effect := ExplosionEffect.new()
 	_effect_root.add_child(effect)
 	effect.setup(blast, bubble.cell, bubble.bubble_owner)
+	_arena_view.add_explosion(effect)
 	effect.finished.connect(_on_explosion_finished)
 	_register_explosion_effect(effect)
 	_audio_call(&"play_sfx", [&"explode"])
@@ -496,12 +592,14 @@ func _update_scoreboard() -> void:
 		return int(a.get("kills", 0)) > int(b.get("kills", 0))
 	)
 	hud.update_scores(entries)
+	scores_changed.emit(entries)
 
 func _end_round() -> void:
 	if _round_over:
 		return
 	_round_over = true
 	_is_paused = true
+	app_state = AppState.RESULT
 	_audio_call(&"stop_music")
 	var best_score: int = -1
 	var winners: Array[String] = []
@@ -519,6 +617,13 @@ func _end_round() -> void:
 	else:
 		hud.show_result("平局", "%s｜击败：%d" % ["、".join(winners), best_score])
 		_audio_call(&"play_sfx", [&"draw"])
+	var results: Array[Dictionary] = []
+	for value in _scores.values():
+		results.append((value as Dictionary).duplicate())
+	results.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return int(a.get("kills", 0)) > int(b.get("kills", 0))
+	)
+	match_finished.emit(results)
 	get_tree().paused = true
 
 func _pause_match() -> void:
@@ -574,6 +679,11 @@ func _ensure_input_actions() -> void:
 	_register_action(&"place_bomb", [KEY_SPACE])
 	_register_action(&"self_rescue", [KEY_1])
 	_register_action(&"pause_game", [KEY_ESCAPE])
+	_register_action(&"zoom_in", [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD])
+	_register_action(&"zoom_out", [KEY_MINUS, KEY_KP_SUBTRACT])
+	_register_action(&"zoom_reset", [KEY_0, KEY_KP_0])
+	_register_mouse_button_action(&"zoom_in", MOUSE_BUTTON_WHEEL_UP)
+	_register_mouse_button_action(&"zoom_out", MOUSE_BUTTON_WHEEL_DOWN)
 
 func _register_action(action: StringName, keycodes: Array) -> void:
 	if InputMap.has_action(action):
@@ -583,6 +693,12 @@ func _register_action(action: StringName, keycodes: Array) -> void:
 		var event := InputEventKey.new()
 		event.keycode = keycode
 		InputMap.action_add_event(action, event)
+
+
+func _register_mouse_button_action(action: StringName, button_index: MouseButton) -> void:
+	var event := InputEventMouseButton.new()
+	event.button_index = button_index
+	InputMap.action_add_event(action, event)
 
 func _format_time(seconds_left: float) -> String:
 	var total_seconds: int = maxi(0, ceili(seconds_left))
@@ -594,7 +710,7 @@ func _update_time_display() -> void:
 		return
 	_displayed_seconds = total_seconds
 	hud.update_timer(float(total_seconds))
-	_arena_timer_label.text = _format_time(float(total_seconds))
+	time_changed.emit(total_seconds)
 
 func _prune_ai_item_claims() -> void:
 	var now_ms: int = get_simulation_time_ms()

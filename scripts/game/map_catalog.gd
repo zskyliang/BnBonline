@@ -1,17 +1,67 @@
 class_name MapCatalog
 extends RefCounted
-## Factory for the two maps retained from the H5 version.
+## Factory for the two fixed clay-island battle maps.
+
+const HARBOR_MARKET := "harbor-market"
+const BELL_GARDEN := "bell-garden"
+const PLAYER_SPAWN := Vector2i(1, 11)
+
+const HARBOR_LAYOUT: PackedStringArray = [
+	"~~~~~~~~~~~~~~~",
+	"~..##..+.##...~",
+	"~..##+.+.##...~",
+	"~+.+..#..+.+..~",
+	"~..#.+.+.#.+..~",
+	"~+.#..+..#..+.~",
+	"~.+..##.##.+..~",
+	"~..+.##.##..+.~",
+	"~.+#..+.+..#+.~",
+	"~..#.+..+..#..~",
+	"~..+..##.+.+..~",
+	"~...+...+.....~",
+	"~~~~~~~~~~~~~~~",
+]
+
+const BELL_LAYOUT: PackedStringArray = [
+	"~~~~~~~~~~~~~~~",
+	"~...+.###+....~",
+	"~..+..###..+..~",
+	"~.....###.....~",
+	"~.#.+..+..+.#.~",
+	"~.#..+...+..#.~",
+	"~+..##.+.##..+~",
+	"~..+.##.##.+..~",
+	"~.+..##.##..+.~",
+	"~.#.+..+..+.#.~",
+	"~..+.......+..~",
+	"~....+...+....~",
+	"~~~~~~~~~~~~~~~",
+]
+
 
 static func get_map(map_id: String) -> MapData:
-	if map_id == "windmill-heart":
-		return _build_windmill_heart()
-	return _build_classic()
+	var migrated_id := migrate_legacy_id(map_id)
+	if migrated_id == BELL_GARDEN:
+		return _build_bell_garden()
+	return _build_harbor_market()
+
 
 static func get_options() -> Array[Dictionary]:
 	return [
-		{"id": "classic", "label": "当前地图（经典）"},
-		{"id": "windmill-heart", "label": "风车爱心地图"},
+		{"id": HARBOR_MARKET, "label": "软陶海岛集市"},
+		{"id": BELL_GARDEN, "label": "钟楼花园"},
 	]
+
+
+static func is_valid_id(map_id: String) -> bool:
+	return map_id == HARBOR_MARKET or map_id == BELL_GARDEN
+
+
+static func migrate_legacy_id(map_id: String) -> String:
+	if map_id == "windmill-heart" or map_id == BELL_GARDEN:
+		return BELL_GARDEN
+	return HARBOR_MARKET
+
 
 static func clone_matrix(source: Array[PackedInt32Array]) -> Array[PackedInt32Array]:
 	var result: Array[PackedInt32Array] = []
@@ -19,81 +69,118 @@ static func clone_matrix(source: Array[PackedInt32Array]) -> Array[PackedInt32Ar
 		result.append(row.duplicate())
 	return result
 
-static func _build_classic() -> MapData:
-	var ground: Array[PackedInt32Array] = [
-		PackedInt32Array([1,1,1,1,1,1,3,1,3,1,1,1,1,1,1]),
-		PackedInt32Array([2,2,1,1,1,1,3,1,3,1,1,1,1,2,1]),
-		PackedInt32Array([2,3,3,3,3,3,3,3,3,3,3,3,3,3,3]),
-		PackedInt32Array([3,2,2,1,1,1,1,3,1,3,1,1,1,1,2]),
-		PackedInt32Array([2,1,1,1,1,1,1,3,1,3,1,1,1,1,1]),
-		PackedInt32Array([1,2,2,1,1,1,1,3,1,3,1,1,1,1,2]),
-		PackedInt32Array([2,1,1,1,1,1,1,3,1,3,1,1,1,1,1]),
-		PackedInt32Array([1,2,2,1,1,1,1,3,1,3,1,1,1,1,2]),
-		PackedInt32Array([2,1,1,1,1,1,1,3,1,3,1,1,1,1,1]),
-		PackedInt32Array([1,2,2,1,1,1,1,3,1,3,1,1,1,1,2]),
-		PackedInt32Array([2,3,3,3,3,3,3,3,3,3,3,3,3,3,3]),
-		PackedInt32Array([3,2,2,1,1,1,1,3,1,3,1,1,1,1,2]),
-		PackedInt32Array([2,1,1,1,1,1,1,3,1,3,1,1,1,1,1]),
-	]
-	var barriers: Array[PackedInt32Array] = [
-		PackedInt32Array([0,3,1,5,1,7,0,7,0,7,1,4,1,4,0]),
-		PackedInt32Array([0,0,3,0,0,1,0,0,0,1,2,1,2,0,0]),
-		PackedInt32Array([3,5,3,5,1,7,3,7,3,7,1,4,1,4,0]),
-		PackedInt32Array([0,3,2,1,7,3,3,1,3,3,7,1,2,1,2]),
-		PackedInt32Array([1,7,1,7,3,3,7,0,7,3,3,7,1,7,1]),
-		PackedInt32Array([2,0,3,0,0,7,1,1,1,7,0,0,3,0,2]),
-		PackedInt32Array([2,7,1,7,0,2,3,3,3,2,0,7,1,7,2]),
-		PackedInt32Array([2,0,3,0,0,7,1,1,1,7,0,0,3,0,2]),
-		PackedInt32Array([1,7,1,7,3,3,7,2,7,3,3,7,1,7,1]),
-		PackedInt32Array([2,1,2,1,7,3,3,1,3,3,7,1,2,1,2]),
-		PackedInt32Array([0,4,1,4,1,7,3,7,3,7,1,6,1,6,0]),
-		PackedInt32Array([0,0,2,1,2,1,0,0,0,1,2,1,2,0,0]),
-		PackedInt32Array([0,4,1,4,1,7,0,7,0,7,1,6,1,6,0]),
-	]
-	# The maintained battle mode replaced trees and houses with boxes.
-	for y: int in range(barriers.size()):
-		for x: int in range(barriers[y].size()):
-			if barriers[y][x] in [4, 5, 6, 7]:
-				barriers[y][x] = 3
-	return MapData.new().configure("classic", "当前地图（经典）", "town", ground, barriers, Vector2i.ZERO)
 
-static func _build_windmill_heart() -> MapData:
-	var ground: Array[PackedInt32Array] = []
-	var barriers: Array[PackedInt32Array] = []
-	for y: int in range(GameConstants.GRID_ROWS):
-		var ground_row := PackedInt32Array()
-		var barrier_row := PackedInt32Array()
-		ground_row.resize(GameConstants.GRID_COLUMNS)
-		barrier_row.resize(GameConstants.GRID_COLUMNS)
-		ground_row.fill(1)
-		barrier_row.fill(0)
-		ground.append(ground_row)
-		barriers.append(barrier_row)
-	var heart: PackedStringArray = [
-		"...............", "..#...###...#..", ".....#####.....",
-		"....#.....#....", "..##.......##..", ".###.......###.",
-		".###.......###.", "..##.......##..", "..###.....###..",
-		"....##...##....", ".....#####.....", "......###......",
-		"...............",
+static func count_code(map_data: MapData, code: int) -> int:
+	var result := 0
+	for row: PackedInt32Array in map_data.barrier_cells:
+		for value: int in row:
+			if value == code:
+				result += 1
+	return result
+
+
+static func _build_harbor_market() -> MapData:
+	var buildings: Array[BuildingPlacement] = [
+		_placement("cottage_red", Vector2i(3, 1), Vector2i(2, 2), 0, 0),
+		_placement("shop_blue", Vector2i(9, 1), Vector2i(2, 2), 2, 1),
+		_placement("cottage_mustard", Vector2i(5, 6), Vector2i(2, 2), 1, 2),
+		_placement("cottage_green", Vector2i(8, 6), Vector2i(2, 2), 3, 3),
 	]
-	for y: int in range(GameConstants.GRID_ROWS):
-		for x: int in range(GameConstants.GRID_COLUMNS):
-			if heart[y][x] == "#":
-				barriers[y][x] = 3
-	for x: int in range(GameConstants.GRID_COLUMNS):
-		barriers[0][x] = 8
-		barriers[GameConstants.GRID_ROWS - 1][x] = 8
-	for y: int in range(GameConstants.GRID_ROWS):
-		barriers[y][0] = 8
-		barriers[y][GameConstants.GRID_COLUMNS - 1] = 8
-	barriers[1][1] = 0
-	barriers[1][2] = 0
-	barriers[2][1] = 0
-	for x: int in range(6, 9):
-		barriers[6][x] = 9
-	var decorations: Array[Dictionary] = [{"type": "windmill", "cell": Vector2i(6, 3)}]
+	for cell: Vector2i in [
+		Vector2i(3, 4), Vector2i(3, 5), Vector2i(3, 8), Vector2i(3, 9),
+		Vector2i(6, 3), Vector2i(6, 10), Vector2i(7, 10),
+		Vector2i(9, 4), Vector2i(9, 5), Vector2i(11, 8), Vector2i(11, 9),
+	]:
+		buildings.append(_placement("hedge", cell, Vector2i.ONE, cell.x + cell.y, 0, false))
 	return MapData.new().configure(
-		"windmill-heart", "风车爱心地图", "maptype2", ground, barriers,
-		Vector2i(1, 1), decorations
+		HARBOR_MARKET,
+		"软陶海岛集市",
+		"harbor",
+		_make_ground("harbor"),
+		_parse_layout(HARBOR_LAYOUT),
+		PLAYER_SPAWN,
+		buildings,
+		AABB(Vector3(-9.5, -1.1, -8.5), Vector3(19.0, 6.4, 17.0)),
+		[
+			{"type": "dock", "cell": Vector2i(2, 12), "rotation": 0},
+			{"type": "dock", "cell": Vector2i(12, 0), "rotation": 2},
+		]
 	)
 
+
+static func _build_bell_garden() -> MapData:
+	var buildings: Array[BuildingPlacement] = [
+		_placement("bell_tower", Vector2i(6, 1), Vector2i(3, 3), 0, 0),
+		_placement("clinic", Vector2i(4, 6), Vector2i(2, 1), 0, 0),
+		_placement("cottage_red", Vector2i(5, 7), Vector2i(2, 2), 1, 1),
+		_placement("clinic", Vector2i(9, 6), Vector2i(2, 1), 2, 2),
+		_placement("cottage_green", Vector2i(8, 7), Vector2i(2, 2), 3, 3),
+	]
+	for cell: Vector2i in [
+		Vector2i(2, 4), Vector2i(2, 5), Vector2i(2, 9),
+		Vector2i(12, 4), Vector2i(12, 5), Vector2i(12, 9),
+	]:
+		buildings.append(_placement("hedge", cell, Vector2i.ONE, cell.y, 0, false))
+	return MapData.new().configure(
+		BELL_GARDEN,
+		"钟楼花园",
+		"garden",
+		_make_ground("garden"),
+		_parse_layout(BELL_LAYOUT),
+		PLAYER_SPAWN,
+		buildings,
+		AABB(Vector3(-9.5, -1.1, -8.5), Vector3(19.0, 7.2, 17.0)),
+		[
+			{"type": "fountain", "cell": Vector2i(7, 0), "rotation": 0},
+			{"type": "garden_gate", "cell": Vector2i(7, 12), "rotation": 0},
+		]
+	)
+
+
+static func _parse_layout(layout: PackedStringArray) -> Array[PackedInt32Array]:
+	assert(layout.size() == GameConstants.GRID_ROWS)
+	var result: Array[PackedInt32Array] = []
+	for row_text: String in layout:
+		assert(row_text.length() == GameConstants.GRID_COLUMNS)
+		var row := PackedInt32Array()
+		for character: String in row_text:
+			match character:
+				"#":
+					row.append(1)
+				"+":
+					row.append(3)
+				"~":
+					row.append(9)
+				_:
+					row.append(0)
+		result.append(row)
+	return result
+
+
+static func _make_ground(theme_id: String) -> Array[PackedInt32Array]:
+	var result: Array[PackedInt32Array] = []
+	for y: int in range(GameConstants.GRID_ROWS):
+		var row := PackedInt32Array()
+		for x: int in range(GameConstants.GRID_COLUMNS):
+			var accent := 2 if (x * 5 + y * 3 + theme_id.length()) % 11 == 0 else 1
+			row.append(accent)
+		result.append(row)
+	return result
+
+
+static func _placement(
+		asset_id: String,
+		origin_cell: Vector2i,
+		footprint: Vector2i,
+		rotation_quadrants: int,
+		variant: int,
+		occludable: bool = true
+	) -> BuildingPlacement:
+	return BuildingPlacement.new().configure(
+		asset_id,
+		origin_cell,
+		footprint,
+		rotation_quadrants,
+		variant,
+		occludable
+	)

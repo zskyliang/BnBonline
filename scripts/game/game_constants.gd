@@ -26,6 +26,24 @@ const ITEM_POWER: int = 103
 static func grid_to_world(cell: Vector2i) -> Vector2:
 	return GRID_ORIGIN + Vector2(cell) * CELL_SIZE + Vector2.ONE * CELL_SIZE * 0.5
 
+
+static func logic_to_world_3d(logic_position: Vector2, height: float = 0.0) -> Vector3:
+	var first_cell_center := GRID_ORIGIN + Vector2.ONE * CELL_SIZE * 0.5
+	var cell_position := (logic_position - first_cell_center) / CELL_SIZE
+	return Vector3(
+		cell_position.x - float(GRID_COLUMNS - 1) * 0.5,
+		height,
+		cell_position.y - float(GRID_ROWS - 1) * 0.5
+	)
+
+
+static func grid_to_world_3d(cell: Vector2i, height: float = 0.0) -> Vector3:
+	return Vector3(
+		float(cell.x) - float(GRID_COLUMNS - 1) * 0.5,
+		height,
+		float(cell.y) - float(GRID_ROWS - 1) * 0.5
+	)
+
 static func grid_to_top_left(cell: Vector2i) -> Vector2:
 	return GRID_ORIGIN + Vector2(cell) * CELL_SIZE
 

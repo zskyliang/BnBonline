@@ -3,6 +3,8 @@
 
 # Local exports and packages
 build/
+output/
+.playwright-cli/
 *.pck
 *.zip
 

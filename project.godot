@@ -2,7 +2,7 @@
 
 config/name="BnBonline Godot"
 run/main_scene="res://scenes/main.tscn"
-run/max_fps=120
+run/max_fps=60
 
 [autoload]
 
@@ -10,13 +10,18 @@ AudioManager="*res://scripts/audio_manager.gd"
 
 [display]
 
-window/size/viewport_width=1040
-window/size/viewport_height=600
+window/size/viewport_width=1280
+window/size/viewport_height=720
 window/size/window_width_override=1040
 window/size/window_height_override=600
 window/stretch/mode="canvas_items"
-window/stretch/aspect="keep"
+window/stretch/aspect="expand"
 window/vsync/vsync_mode=0
+
+[gui]
+
+theme/custom_font="res://assets/fonts/NotoSansSC-BnB-Subset.ttf"
+theme/default_font_multichannel_signed_distance_field=true
 
 [physics]
 
@@ -26,6 +31,7 @@ common/physics_interpolation=true
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+lights_and_shadows/directional_shadow/size=1024
 textures/default_filters/use_nearest_mipmap_filter=false
 textures/canvas_textures/default_texture_filter=0
 

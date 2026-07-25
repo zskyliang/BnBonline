@@ -12,12 +12,17 @@ func _run() -> void:
 	root.add_child(match_node)
 	await process_frame
 	# Persisted player settings must not make the smoke scenario nondeterministic.
-	match_node.settings.map_id = "classic"
+	match_node.settings.map_id = MapCatalog.HARBOR_MARKET
 	match_node.settings.ai_count = 1
 	match_node.start_match()
 	await process_frame
 	_assert(match_node.get_actors().size() == match_node.settings.ai_count + 1, "configured fighters spawned")
 	_assert(match_node.board.cells.size() == 13, "map initialized")
+	_assert(
+		match_node._arena_view.board_view.get_building_views().size() \
+			== match_node.board.map_data.building_units.size(),
+		"every rigid map footprint creates a clay building"
+	)
 	_assert(
 		match_node.board._visual_root.get_child_count() < GameConstants.GRID_COLUMNS * GameConstants.GRID_ROWS,
 		"static ground uses batched drawing instead of one node per tile"
@@ -33,7 +38,37 @@ func _run() -> void:
 	)
 	var player: GameActor = match_node.get_player()
 	_assert(is_instance_valid(player), "player spawned")
-	_assert(InputMap.has_action("move_left") and InputMap.has_action("place_bomb"), "semantic input actions registered")
+	_assert(
+		InputMap.has_action("move_left") and InputMap.has_action("place_bomb") \
+			and InputMap.has_action("zoom_in") and InputMap.has_action("zoom_out"),
+		"movement, bubble and camera zoom input actions registered"
+	)
+	var default_camera_size := match_node._arena_view.camera.size
+	var zoom_in_event := InputEventAction.new()
+	zoom_in_event.action = &"zoom_in"
+	zoom_in_event.pressed = true
+	match_node.call("_unhandled_input", zoom_in_event)
+	_assert(
+		match_node._arena_view.camera.size < default_camera_size,
+		"live match zoom-in input enlarges the map"
+	)
+	var zoom_reset_event := InputEventAction.new()
+	zoom_reset_event.action = &"zoom_reset"
+	zoom_reset_event.pressed = true
+	match_node.call("_unhandled_input", zoom_reset_event)
+	_assert(
+		match_node._arena_view.get_zoom_percent() == 110,
+		"live match zoom reset restores the recommended scale"
+	)
+	var zoom_in_button := match_node.hud.find_child("ZoomInButton", true, false) as Button
+	_assert(is_instance_valid(zoom_in_button), "match HUD exposes a clickable map zoom control")
+	if is_instance_valid(zoom_in_button):
+		zoom_in_button.pressed.emit()
+		_assert(
+			match_node._arena_view.get_zoom_percent() == 120,
+			"HUD zoom button updates the live orthographic view"
+		)
+		match_node._arena_view.reset_zoom()
 	match_node.call("_pause_match")
 	_assert(paused, "pause suspends the scene tree")
 	match_node.call("_resume_match")
@@ -86,13 +121,13 @@ func _run() -> void:
 			"live %s rigid boundary blocks held input" % str(rigid_input["side"])
 		)
 	var boundary_position := Vector2(
-		GameConstants.GRID_ORIGIN.x + GameConstants.CELL_SIZE,
-		GameConstants.grid_to_world(Vector2i(0, 1)).y
+		GameConstants.GRID_ORIGIN.x + GameConstants.CELL_SIZE * 2.0,
+		GameConstants.grid_to_world(Vector2i(1, 10)).y
 	)
 	player.position = boundary_position
 	var half_safe_effect := ExplosionEffect.new()
 	match_node._effect_root.add_child(half_safe_effect)
-	half_safe_effect.setup([Vector2i(0, 1)], Vector2i(0, 1), player)
+	half_safe_effect.setup([Vector2i(1, 10)], Vector2i(1, 10), player)
 	_assert(half_safe_effect.get_child_count() == 0, "explosion cells use batched drawing")
 	match_node.call("_register_explosion_effect", half_safe_effect)
 	match_node.call("_resolve_explosion_hits")
@@ -102,7 +137,7 @@ func _run() -> void:
 	half_safe_effect.queue_free()
 	var full_hit_effect := ExplosionEffect.new()
 	match_node._effect_root.add_child(full_hit_effect)
-	full_hit_effect.setup([Vector2i(0, 1), Vector2i(1, 1)], Vector2i(0, 1), player)
+	full_hit_effect.setup([Vector2i(1, 10), Vector2i(2, 10)], Vector2i(1, 10), player)
 	match_node.call("_register_explosion_effect", full_hit_effect)
 	match_node.call("_resolve_explosion_hits")
 	_assert(not player.stats.is_trapped, "first full-body unsafe frame does not trap")
@@ -141,24 +176,25 @@ func _run() -> void:
 		match_node.board.unregister_bubble(overlap_bubble)
 		ai_actor.stats.active_bubbles = maxi(0, ai_actor.stats.active_bubbles - 1)
 		overlap_bubble.queue_free()
-	player.position = GameConstants.grid_to_world(Vector2i.ZERO)
+	var player_bubble_cell := Vector2i(1, 11)
+	player.position = GameConstants.grid_to_world(player_bubble_cell)
 	_assert(match_node.request_bomb(player), "player bubble accepted")
 	_assert(match_node.board.bombs.size() >= 1, "bubble registered on board")
-	Input.action_press("move_down")
-	for _step: int in range(24):
-		await physics_frame
-	Input.action_release("move_down")
-	_assert(
-		player.position.y >= GameConstants.grid_to_world(Vector2i(0, 1)).y,
-		"player can completely leave a newly placed bubble"
-	)
 	Input.action_press("move_up")
 	for _step: int in range(24):
 		await physics_frame
 	Input.action_release("move_up")
-	_assert(player.current_cell() == Vector2i(0, 1), "player cannot walk back through the bubble after leaving")
+	_assert(
+		player.position.y <= GameConstants.grid_to_world(Vector2i(1, 10)).y,
+		"player can completely leave a newly placed bubble"
+	)
+	Input.action_press("move_down")
+	for _step: int in range(24):
+		await physics_frame
+	Input.action_release("move_down")
+	_assert(player.current_cell() == Vector2i(1, 10), "player cannot walk back through the bubble after leaving")
 	await create_timer(2.0).timeout
-	var chained_cell := Vector2i(0, 1)
+	var chained_cell := Vector2i(1, 10)
 	player.position = GameConstants.grid_to_world(chained_cell)
 	_assert(match_node.request_bomb(player), "second bubble accepted")
 	_assert(match_node.board.bombs.has(chained_cell), "second bubble registered")
@@ -169,11 +205,23 @@ func _run() -> void:
 	if player.stats.is_trapped:
 		player.rescue()
 		_assert(not player.stats.is_trapped, "self rescue works in live match")
-	match_node.settings.map_id = "windmill-heart"
+	match_node.settings.map_id = MapCatalog.BELL_GARDEN
 	match_node.start_match()
 	await process_frame
-	_assert(match_node.board.map_data.map_id == "windmill-heart", "second map restarts successfully")
+	_assert(match_node.board.map_data.map_id == MapCatalog.BELL_GARDEN, "second map restarts successfully")
 	_assert(match_node.get_actors().size() == match_node.settings.ai_count + 1, "fighters respawn after map change")
+	var ai_characters_before_restart: Array[String] = match_node._current_ai_character_ids.duplicate()
+	match_node.start_match()
+	await process_frame
+	_assert(
+		match_node._current_ai_character_ids == ai_characters_before_restart,
+		"restart preserves this round's AI character assignment"
+	)
+	match_node.call("_enter_lobby")
+	_assert(
+		match_node._current_ai_character_ids.is_empty(),
+		"returning to the lobby clears AI characters for the next random draw"
+	)
 	var audio_manager: Node = root.get_node_or_null("AudioManager")
 	if is_instance_valid(audio_manager):
 		audio_manager.call("stop_all")
