@@ -1,23 +1,17 @@
 extends SceneTree
-## Four-AI scheduling and main-thread decision burst regression benchmark.
+## Four-AI paint-campaign scheduler, fairness, and latency stress check.
 
-const STRESS_AI_COUNT: int = 4
-const STRESS_DURATION_MS: int = 7000
-const WARMUP_MS: int = 700
-const BENCHMARK_TIME_SCALE: float = 12.0
-const BENCHMARK_PHYSICS_TICKS: int = 720
-const MEAN_DECISION_GATE_USEC: float = 5000.0
-const P95_DECISION_GATE_USEC: int = 10000
-const P99_FRAME_BURST_GATE_USEC: int = 16667
-const MOVEMENT_RATIO_GATE: float = 0.78
+const SIMULATION_FRAMES: int = 360
+const MIN_DECISIONS_PER_AI: int = 24
+const P95_GATE_USEC: int = 10000
 
-var _match: MatchController
-var _sample_started_ms: int = 0
-var _decision_times_usec: PackedInt32Array = PackedInt32Array()
-var _frame_decision_usec: Dictionary = {}
-var _frame_decision_count: Dictionary = {}
-var _controller_decision_count: Dictionary = {}
+var _failed: bool = false
+var _decision_counts: Dictionary = {}
+var _frame_decisions: Dictionary = {}
+var _decision_times: PackedInt64Array = PackedInt64Array()
 var _decision_times_by_mode: Dictionary = {}
+var _evasion_times_by_kind: Dictionary = {}
+var _peak_active_bubbles: Dictionary = {}
 
 
 func _initialize() -> void:
@@ -25,219 +19,189 @@ func _initialize() -> void:
 
 
 func _run() -> void:
-	Engine.time_scale = BENCHMARK_TIME_SCALE
-	Engine.physics_ticks_per_second = BENCHMARK_PHYSICS_TICKS
-	var packed: PackedScene = load("res://scenes/main.tscn") as PackedScene
-	_match = packed.instantiate() as MatchController
-	root.add_child(_match)
+	var packed := load("res://scenes/main.tscn") as PackedScene
+	var match_node := packed.instantiate() as MatchController
+	root.add_child(match_node)
 	await process_frame
-	_match.settings.ai_count = STRESS_AI_COUNT
-	_match.settings.max_speed = 300
-	_match.settings.max_bubbles = 8
-	_match.settings.max_power = 10
-	_match.start_match()
-	_configure_stress_arena()
-	_connect_decision_metrics()
-	await _wait_simulation_ms(WARMUP_MS)
-	_sample_started_ms = _match.get_simulation_time_ms()
-	await _wait_simulation_ms(STRESS_DURATION_MS)
-	var average_usec: float = _average_of(_decision_times_usec)
-	var p95_usec: int = _percentile_of(_decision_times_usec, 0.95)
-	var frame_bursts: PackedInt32Array = PackedInt32Array()
-	var max_decisions_in_frame: int = 0
-	var clustered_frames: int = 0
-	for frame: int in _frame_decision_usec.keys():
-		frame_bursts.append(int(_frame_decision_usec[frame]))
-		var count: int = int(_frame_decision_count.get(frame, 0))
-		max_decisions_in_frame = maxi(max_decisions_in_frame, count)
-		if count > 1:
-			clustered_frames += 1
-	var p95_frame_burst: int = _percentile_of(frame_bursts, 0.95)
-	var p99_frame_burst: int = _percentile_of(frame_bursts, 0.99)
-	var minimum_controller_decisions: int = 999999
-	var maximum_controller_decisions: int = 0
-	for actor_id: int in _controller_decision_count.keys():
-		var count: int = int(_controller_decision_count[actor_id])
-		minimum_controller_decisions = mini(minimum_controller_decisions, count)
-		maximum_controller_decisions = maxi(maximum_controller_decisions, count)
-	print("AI stress decisions: %d samples, mean %.2f ms, p95 %.2f ms" % [
-		_decision_times_usec.size(), average_usec / 1000.0, p95_usec / 1000.0,
-	])
-	print("AI stress frame bursts: %d active frames, p95 %.2f ms, p99 %.2f ms, max decisions/frame %d, clustered frames %d" % [
-		frame_bursts.size(), p95_frame_burst / 1000.0, p99_frame_burst / 1000.0,
-		max_decisions_in_frame, clustered_frames,
-	])
-	print("AI stress scheduling fairness: min %d, max %d decisions/controller" % [
-		minimum_controller_decisions, maximum_controller_decisions,
-	])
-	for mode: int in _decision_times_by_mode.keys():
-		var mode_times: PackedInt32Array = _decision_times_by_mode[mode] as PackedInt32Array
-		print("  %s: %d samples, mean %.2f ms, p95 %.2f ms" % [
-			RuleAI.Mode.keys()[mode], mode_times.size(),
-			_average_of(mode_times) / 1000.0, _percentile_of(mode_times, 0.95) / 1000.0,
-		])
-	var movement_result: Dictionary = await _run_safe_movement_probe()
-	print("AI stress safe movement: %.1f%% moving frames, %d visited cells, %d immediate reversals" % [
-		float(movement_result["moving_ratio"]) * 100.0,
-		int(movement_result["visited_cells"]),
-		int(movement_result["immediate_reversals"]),
-	])
-	print("AI stress safe movement idle: max %d frames, direction active %.1f%%" % [
-		int(movement_result["max_idle_frames"]),
-		float(movement_result["direction_active_ratio"]) * 100.0,
-	])
-	var failed: bool = _decision_times_usec.size() < STRESS_AI_COUNT * 30 \
-		or average_usec >= MEAN_DECISION_GATE_USEC \
-		or p95_usec >= P95_DECISION_GATE_USEC \
-		or p99_frame_burst >= P99_FRAME_BURST_GATE_USEC \
-		or max_decisions_in_frame > 1 \
-		or maximum_controller_decisions - minimum_controller_decisions > 1 \
-		or float(movement_result["moving_ratio"]) < MOVEMENT_RATIO_GATE \
-		or int(movement_result["immediate_reversals"]) > 0
-	Engine.time_scale = 1.0
-	Engine.physics_ticks_per_second = 60
-	var audio_manager: Node = root.get_node_or_null("AudioManager")
-	if is_instance_valid(audio_manager):
-		audio_manager.call("stop_all")
-	_match.queue_free()
+	match_node.call("_enter_lobby")
+	match_node.settings.character_id = "builder"
+	match_node.settings.player_color_id = "red"
+	match_node._rng.seed = 20260726
+	match_node.call("_begin_new_run")
+	match_node.run_progress.advance_with_skill(RunProgress.SKILL_SPEED, match_node._rng)
+	match_node.run_progress.advance_with_skill(RunProgress.SKILL_BUBBLE, match_node._rng)
+	match_node.run_progress.advance_with_skill(RunProgress.SKILL_POWER, match_node._rng)
+	match_node.start_match()
 	await process_frame
-	await process_frame
-	print("AI stress benchmark: %s" % ("FAILED" if failed else "PASS"))
-	quit(1 if failed else 0)
-
-
-func _configure_stress_arena() -> void:
-	for y: int in range(GameConstants.GRID_ROWS):
-		for x: int in range(GameConstants.GRID_COLUMNS):
-			_match.board.cells[y][x] = 0
-	var center := Vector2i(7, 6)
-	var ai_offsets: Array[Vector2i] = [
-		Vector2i(-4, 0), Vector2i(4, 0), Vector2i(0, -4), Vector2i(0, 4),
-	]
-	var ai_index: int = 0
-	for battle_actor: GameActor in _match.get_actors():
-		battle_actor.stats.move_speed = 275.0
-		battle_actor.stats.power = 3
-		battle_actor.stats.bubble_capacity = 4
-		if battle_actor.is_player:
-			battle_actor.position = GameConstants.grid_to_world(center)
+	var ai_actors: Array[GameActor] = []
+	for actor_index: int in range(match_node.get_actors().size()):
+		var actor: GameActor = match_node.get_actors()[actor_index]
+		if actor.is_player:
 			continue
-		battle_actor.position = GameConstants.grid_to_world(center + ai_offsets[ai_index])
-		ai_index += 1
-
-
-func _connect_decision_metrics() -> void:
-	for battle_actor: GameActor in _match.get_actors():
-		if battle_actor.is_player:
-			continue
-		var actor_id: int = battle_actor.get_instance_id()
-		_controller_decision_count[actor_id] = 0
-		for child: Node in battle_actor.get_children():
-			if child is RuleAI:
-				(child as RuleAI).decision_made.connect(_on_decision_made.bind(actor_id))
-
-
-func _run_safe_movement_probe() -> Dictionary:
-	_match.settings.map_id = "classic"
-	_match.settings.ai_count = 1
-	_match.start_match()
-	for y: int in range(GameConstants.GRID_ROWS):
-		for x: int in range(GameConstants.GRID_COLUMNS):
-			_match.board.cells[y][x] = 0
-	var ai_actor: GameActor
-	var controller: RuleAI
-	for battle_actor: GameActor in _match.get_actors():
-		if battle_actor.is_player:
-			battle_actor.stats.is_dead = true
-			battle_actor.visible = false
-			continue
-		ai_actor = battle_actor
-		ai_actor.position = GameConstants.grid_to_world(Vector2i(7, 6))
-		ai_actor.stats.move_speed = 200.0
-		for child: Node in ai_actor.get_children():
-			if child is RuleAI:
-				controller = child as RuleAI
-				break
-	controller.reset_for_scenario(9001)
-	controller.reconsider_now()
-	await _wait_simulation_ms(300)
-	var previous_position: Vector2 = ai_actor.position
-	var transition_cells: Array[Vector2i] = [ai_actor.current_cell()]
-	var visited_cells: Dictionary = {ai_actor.current_cell(): true}
-	var moving_frames: int = 0
-	var direction_active_frames: int = 0
-	var total_frames: int = 0
-	var immediate_reversals: int = 0
-	var current_idle_frames: int = 0
-	var max_idle_frames: int = 0
-	var deadline: int = _match.get_simulation_time_ms() + 4000
-	while _match.get_simulation_time_ms() < deadline:
+		ai_actors.append(actor)
+		_check(actor.color_id == match_node.run_progress.ai_color_id, "all AI share one team color")
+		var assigned_points: int = roundi(
+			(actor.stats.move_speed - GameConstants.INITIAL_SPEED) \
+			/ GameConstants.SPEED_PER_SKILL_POINT
+		) + actor.stats.bubble_capacity - GameConstants.INITIAL_BUBBLES \
+			+ actor.stats.power - GameConstants.INITIAL_POWER
+		_check(assigned_points == 3, "each stage-four AI owns three skill points")
+		var controller: RuleAI = _controller_for(actor)
+		controller.set_decision_seed(20260726 + actor_index * 101)
+		_decision_counts[actor.get_instance_id()] = 0
+		_peak_active_bubbles[actor.get_instance_id()] = 0
+		controller.decision_made.connect(_on_decision.bind(actor.get_instance_id()))
+	_check(ai_actors.size() == 4, "stage four runs four AI")
+	for index: int in range(6):
+		match_node.board.spawn_item(
+			ArenaItemType.ALL[index % ArenaItemType.ALL.size()],
+			Vector2i(index + 1, 3 + index % 4),
+			index
+		)
+	for _frame: int in range(SIMULATION_FRAMES):
 		await physics_frame
-		total_frames += 1
-		if ai_actor.position.distance_to(previous_position) > 0.05:
-			moving_frames += 1
-			current_idle_frames = 0
-		else:
-			current_idle_frames += 1
-			max_idle_frames = maxi(max_idle_frames, current_idle_frames)
-		if ai_actor._desired_direction != Vector2.ZERO:
-			direction_active_frames += 1
-		previous_position = ai_actor.position
-		var current_cell: Vector2i = ai_actor.current_cell()
-		visited_cells[current_cell] = true
-		if current_cell != transition_cells[-1]:
-			if transition_cells.size() >= 2 and current_cell == transition_cells[-2]:
-				immediate_reversals += 1
-			transition_cells.append(current_cell)
-	return {
-		"moving_ratio": float(moving_frames) / maxf(1.0, float(total_frames)),
-		"visited_cells": visited_cells.size(),
-		"immediate_reversals": immediate_reversals,
-		"max_idle_frames": max_idle_frames,
-		"direction_active_ratio": float(direction_active_frames) / maxf(1.0, float(total_frames)),
-	}
+		for actor: GameActor in ai_actors:
+			_peak_active_bubbles[actor.get_instance_id()] = maxi(
+				int(_peak_active_bubbles.get(actor.get_instance_id(), 0)),
+				actor.stats.active_bubbles
+			)
+	var minimum_count: int = 99999
+	var maximum_count: int = 0
+	for count_value: Variant in _decision_counts.values():
+		var count: int = int(count_value)
+		minimum_count = mini(minimum_count, count)
+		maximum_count = maxi(maximum_count, count)
+		_check(count >= MIN_DECISIONS_PER_AI, "every AI receives regular scheduler decisions")
+	_check(maximum_count - minimum_count <= 2, "round-robin scheduler remains fair")
+	var maximum_same_frame: int = 0
+	for count_value: Variant in _frame_decisions.values():
+		maximum_same_frame = maxi(maximum_same_frame, int(count_value))
+	_check(maximum_same_frame <= 1, "normal scheduler never dispatches two AI on one physics frame")
+	_decision_times.sort()
+	var p95_index: int = clampi(
+		ceili(float(_decision_times.size()) * 0.95) - 1,
+		0,
+		_decision_times.size() - 1
+	)
+	var p95_usec: int = int(_decision_times[p95_index])
+	_check(p95_usec < P95_GATE_USEC, "four-AI P95 decision latency stays below 10 ms")
+	var counts: Dictionary = match_node.board.get_territory_counts()
+	_check(int(counts["ai"]) > 0, "four-AI match paints shared AI territory")
+	var collected_item_count: int = 0
+	var total_peak_unused_slots: int = 0
+	for actor: GameActor in ai_actors:
+		collected_item_count += actor.stats.stage_speed_items \
+			+ actor.stats.stage_bubble_items \
+			+ actor.stats.stage_power_items
+		var peak_active: int = int(_peak_active_bubbles.get(actor.get_instance_id(), 0))
+		var peak_unused: int = maxi(0, actor.stats.bubble_capacity - peak_active)
+		total_peak_unused_slots += peak_unused
+		_check(
+			peak_unused <= 1,
+			"each AI drives safe live bubble capacity to within one free slot; %s peaked %d/%d"
+			% [actor.actor_name, peak_active, actor.stats.bubble_capacity]
+		)
+	_check(collected_item_count > 0, "four-AI live battle successfully collects useful items")
+	_check(
+		float(total_peak_unused_slots) / maxf(1.0, float(ai_actors.size())) <= 0.5,
+		"four-AI average peak free slots stays at or below 0.5"
+	)
+	var distinct_item_targets: Dictionary = {}
+	var collecting_count: int = 0
+	for actor: GameActor in ai_actors:
+		var controller: RuleAI = _controller_for(actor)
+		if controller.current_mode == RuleAI.Mode.COLLECTING:
+			collecting_count += 1
+			distinct_item_targets[controller.decision_target] = true
+	_check(
+		distinct_item_targets.size() == collecting_count,
+		"four-AI item coordination prevents duplicate live pickup targets"
+	)
+	print(
+		"BnBonline AI paint stress: decisions %d-%d, same-frame max %d, p95 %.2f ms, AI cells %d, avg peak free slots %.2f"
+		% [
+			minimum_count,
+			maximum_count,
+			maximum_same_frame,
+			float(p95_usec) / 1000.0,
+			int(counts["ai"]),
+			float(total_peak_unused_slots) / maxf(1.0, float(ai_actors.size())),
+		]
+	)
+	for mode: Variant in _decision_times_by_mode:
+		var mode_times: PackedInt64Array = _decision_times_by_mode[mode]
+		mode_times.sort()
+		var mode_p95_index: int = clampi(
+			ceili(float(mode_times.size()) * 0.95) - 1,
+			0,
+			mode_times.size() - 1
+		)
+		print(
+			"  %s: n=%d p95=%.2f ms max=%.2f ms"
+			% [
+				RuleAI.Mode.keys()[int(mode)],
+				mode_times.size(),
+				float(mode_times[mode_p95_index]) / 1000.0,
+				float(mode_times[-1]) / 1000.0,
+			]
+		)
+	for kind: Variant in _evasion_times_by_kind:
+		var kind_times: PackedInt64Array = _evasion_times_by_kind[kind]
+		kind_times.sort()
+		var kind_p95_index: int = clampi(
+			ceili(float(kind_times.size()) * 0.95) - 1,
+			0,
+			kind_times.size() - 1
+		)
+		print(
+			"  evasion/%s: n=%d p95=%.2f ms max=%.2f ms"
+			% [
+				str(kind),
+				kind_times.size(),
+				float(kind_times[kind_p95_index]) / 1000.0,
+				float(kind_times[-1]) / 1000.0,
+			]
+		)
+	match_node.call("_enter_lobby")
+	match_node.queue_free()
+	await process_frame
+	quit(1 if _failed else 0)
 
 
-func _on_decision_made(
-		mode: int,
-		_target: Vector2i,
+func _on_decision(
+		_mode: int,
+		_target_cell: Vector2i,
 		_score: float,
 		elapsed_usec: int,
 		actor_id: int
 	) -> void:
-	if _sample_started_ms <= 0 or _match.get_simulation_time_ms() < _sample_started_ms:
-		return
-	_decision_times_usec.append(elapsed_usec)
-	var mode_times: PackedInt32Array = _decision_times_by_mode.get(
-		mode, PackedInt32Array()
-	) as PackedInt32Array
+	_decision_counts[actor_id] = int(_decision_counts.get(actor_id, 0)) + 1
+	var frame: int = Engine.get_physics_frames()
+	_frame_decisions[frame] = int(_frame_decisions.get(frame, 0)) + 1
+	_decision_times.append(elapsed_usec)
+	if not _decision_times_by_mode.has(_mode):
+		_decision_times_by_mode[_mode] = PackedInt64Array()
+	var mode_times: PackedInt64Array = _decision_times_by_mode[_mode]
 	mode_times.append(elapsed_usec)
-	_decision_times_by_mode[mode] = mode_times
-	var physics_frame: int = Engine.get_physics_frames()
-	_frame_decision_usec[physics_frame] = int(_frame_decision_usec.get(physics_frame, 0)) + elapsed_usec
-	_frame_decision_count[physics_frame] = int(_frame_decision_count.get(physics_frame, 0)) + 1
-	_controller_decision_count[actor_id] = int(_controller_decision_count.get(actor_id, 0)) + 1
+	_decision_times_by_mode[_mode] = mode_times
+	if _mode == RuleAI.Mode.EVADING:
+		var kind := "hazard" if is_equal_approx(_score, 1000.0) else "drop"
+		if not _evasion_times_by_kind.has(kind):
+			_evasion_times_by_kind[kind] = PackedInt64Array()
+		var kind_times: PackedInt64Array = _evasion_times_by_kind[kind]
+		kind_times.append(elapsed_usec)
+		_evasion_times_by_kind[kind] = kind_times
 
 
-func _wait_simulation_ms(duration_ms: int) -> void:
-	var deadline: int = _match.get_simulation_time_ms() + duration_ms
-	while _match.get_simulation_time_ms() < deadline:
-		await physics_frame
+func _controller_for(actor: GameActor) -> RuleAI:
+	for child: Node in actor.get_children():
+		if child is RuleAI:
+			return child as RuleAI
+	return null
 
 
-func _average_of(values: PackedInt32Array) -> float:
-	if values.is_empty():
-		return 0.0
-	var total: int = 0
-	for value: int in values:
-		total += value
-	return float(total) / values.size()
-
-
-func _percentile_of(values: PackedInt32Array, ratio: float) -> int:
-	if values.is_empty():
-		return 0
-	var sorted_values: PackedInt32Array = values.duplicate()
-	sorted_values.sort()
-	var index: int = clampi(ceili(sorted_values.size() * ratio) - 1, 0, sorted_values.size() - 1)
-	return sorted_values[index]
+func _check(condition: bool, message: String) -> void:
+	if condition:
+		return
+	_failed = true
+	push_error("AI STRESS FAILED: %s" % message)

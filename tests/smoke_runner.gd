@@ -1,238 +1,329 @@
 extends SceneTree
-## Runs the real main scene long enough to exercise AI, bubble fuse, explosion, and trap flow.
+## Exercises the real paint campaign, UI, combat attribution, and progression flow.
 
 var _failed: bool = false
+
 
 func _initialize() -> void:
 	call_deferred("_run")
 
+
 func _run() -> void:
-	var packed: PackedScene = load("res://scenes/main.tscn") as PackedScene
-	var match_node: MatchController = packed.instantiate() as MatchController
+	var packed := load("res://scenes/main.tscn") as PackedScene
+	var match_node := packed.instantiate() as MatchController
 	root.add_child(match_node)
 	await process_frame
-	# Persisted player settings must not make the smoke scenario nondeterministic.
-	match_node.settings.map_id = MapCatalog.HARBOR_MARKET
-	match_node.settings.ai_count = 1
+	match_node.call("_enter_lobby")
+	match_node.settings.character_id = "builder"
+	match_node.settings.player_color_id = "orange"
+	match_node.call("_begin_new_run")
 	match_node.start_match()
 	await process_frame
-	_assert(match_node.get_actors().size() == match_node.settings.ai_count + 1, "configured fighters spawned")
-	_assert(match_node.board.cells.size() == 13, "map initialized")
+	_assert(match_node.run_progress.stage_number == 1, "campaign starts at stage one")
+	_assert(match_node.get_actors().size() == 2, "stage one spawns player and one AI")
 	_assert(
-		match_node._arena_view.board_view.get_building_views().size() \
-			== match_node.board.map_data.building_units.size(),
-		"every rigid map footprint creates a clay building"
+		match_node._remaining_seconds <= 180.0 and match_node._remaining_seconds > 179.0,
+		"live stage starts at three minutes"
 	)
+	_assert(match_node.board.get_open_cells().size() == 195, "live arena exposes all 195 cells")
+	_assert(not InputMap.has_action("self_rescue"), "self-rescue input has been removed")
+	var floor := match_node._arena_view.board_view.find_child(
+		"PaintFloorTiles",
+		true,
+		false
+	) as MultiMeshInstance3D
 	_assert(
-		match_node.board._visual_root.get_child_count() < GameConstants.GRID_COLUMNS * GameConstants.GRID_ROWS,
-		"static ground uses batched drawing instead of one node per tile"
-	)
-	_assert(
-		match_node._arena_timer_label.position.y <= 34.0 \
-			and match_node._arena_timer_label.position.y + match_node._arena_timer_label.size.y <= 58.0,
-		"arena timer stays inside the time header"
-	)
-	_assert(
-		match_node._fps_label.position.y <= 4.0 and match_node._fps_label.text.begins_with("FPS:"),
-		"FPS counter is shown on the map-name row"
+		is_instance_valid(floor) and floor.multimesh.instance_count == 195,
+		"live renderer batches all floor tiles"
 	)
 	var player: GameActor = match_node.get_player()
-	_assert(is_instance_valid(player), "player spawned")
+	var settings_button := match_node.hud.find_child(
+		"SettingsButton",
+		true,
+		false
+	) as Button
+	var scores_panel := match_node.hud.find_child(
+		"LiveScoresPanel",
+		true,
+		false
+	) as PanelContainer
+	var item_panel := match_node.hud.find_child(
+		"LiveItemPanel",
+		true,
+		false
+	) as PanelContainer
+	var scores_style := scores_panel.get_theme_stylebox("panel") as StyleBoxFlat
+	var item_style := item_panel.get_theme_stylebox("panel") as StyleBoxFlat
+	_assert(is_instance_valid(settings_button), "live HUD exposes one dedicated settings button")
 	_assert(
-		InputMap.has_action("move_left") and InputMap.has_action("place_bomb") \
-			and InputMap.has_action("zoom_in") and InputMap.has_action("zoom_out"),
-		"movement, bubble and camera zoom input actions registered"
+		scores_style.bg_color.a < 0.8 and item_style.bg_color.a < 0.8,
+		"live score and item panels stay translucent over the battle"
 	)
-	var default_camera_size := match_node._arena_view.camera.size
-	var zoom_in_event := InputEventAction.new()
-	zoom_in_event.action = &"zoom_in"
-	zoom_in_event.pressed = true
-	match_node.call("_unhandled_input", zoom_in_event)
+	match_node.call("_open_settings")
 	_assert(
-		match_node._arena_view.camera.size < default_camera_size,
-		"live match zoom-in input enlarges the map"
+		paused and match_node.hud.is_settings_visible(),
+		"settings button modal pauses and blocks the live match"
 	)
-	var zoom_reset_event := InputEventAction.new()
-	zoom_reset_event.action = &"zoom_reset"
-	zoom_reset_event.pressed = true
-	match_node.call("_unhandled_input", zoom_reset_event)
+	match_node.call("_close_settings")
 	_assert(
-		match_node._arena_view.get_zoom_percent() == 110,
-		"live match zoom reset restores the recommended scale"
+		not paused and not match_node.hud.is_settings_visible(),
+		"closing settings returns to the same live match"
 	)
-	var zoom_in_button := match_node.hud.find_child("ZoomInButton", true, false) as Button
-	_assert(is_instance_valid(zoom_in_button), "match HUD exposes a clickable map zoom control")
-	if is_instance_valid(zoom_in_button):
-		zoom_in_button.pressed.emit()
-		_assert(
-			match_node._arena_view.get_zoom_percent() == 120,
-			"HUD zoom button updates the live orthographic view"
-		)
-		match_node._arena_view.reset_zoom()
-	match_node.call("_pause_match")
-	_assert(paused, "pause suspends the scene tree")
-	match_node.call("_resume_match")
-	_assert(not paused, "resume restores the scene tree")
-	var first_center: Vector2 = GameConstants.grid_to_world(Vector2i.ZERO)
-	var last_center: Vector2 = GameConstants.grid_to_world(
-		Vector2i(GameConstants.GRID_COLUMNS - 1, GameConstants.GRID_ROWS - 1)
-	)
-	var arena_center: Vector2 = (first_center + last_center) * 0.5
-	var boundary_inputs: Array[Dictionary] = [
-		{"start": Vector2(first_center.x, arena_center.y), "action": "move_left", "side": "left"},
-		{"start": Vector2(last_center.x, arena_center.y), "action": "move_right", "side": "right"},
-		{"start": Vector2(arena_center.x, first_center.y), "action": "move_up", "side": "top"},
-		{"start": Vector2(arena_center.x, last_center.y), "action": "move_down", "side": "bottom"},
-	]
-	for boundary_input: Dictionary in boundary_inputs:
-		var boundary_start: Vector2 = boundary_input["start"] as Vector2
-		var action: StringName = StringName(boundary_input["action"])
-		player.position = boundary_start
-		Input.action_press(action)
-		for _frame: int in range(3):
-			await physics_frame
-		Input.action_release(action)
-		_assert(
-			player.position.is_equal_approx(boundary_start),
-			"live %s boundary blocks held outward input" % str(boundary_input["side"])
-		)
-	var rigid_cell := Vector2i(5, 5)
-	for neighbor: Vector2i in [Vector2i.UP, Vector2i.DOWN, Vector2i.LEFT, Vector2i.RIGHT]:
-		match_node.board.cells[rigid_cell.y + neighbor.y][rigid_cell.x + neighbor.x] = 0
-	match_node.board.cells[rigid_cell.y][rigid_cell.x] = 1
-	var rigid_top_left: Vector2 = GameConstants.grid_to_top_left(rigid_cell)
-	var rigid_center: Vector2 = GameConstants.grid_to_world(rigid_cell)
-	var rigid_inputs: Array[Dictionary] = [
-		{"start": Vector2(rigid_top_left.x - 20.0, rigid_center.y), "action": "move_right", "side": "left"},
-		{"start": Vector2(rigid_top_left.x + GameConstants.CELL_SIZE + 20.0, rigid_center.y), "action": "move_left", "side": "right"},
-		{"start": Vector2(rigid_center.x, rigid_top_left.y - 20.0), "action": "move_down", "side": "top"},
-		{"start": Vector2(rigid_center.x, rigid_top_left.y + GameConstants.CELL_SIZE + 20.0), "action": "move_up", "side": "bottom"},
-	]
-	for rigid_input: Dictionary in rigid_inputs:
-		var rigid_start: Vector2 = rigid_input["start"] as Vector2
-		var action: StringName = StringName(rigid_input["action"])
-		player.position = rigid_start
-		Input.action_press(action)
-		for _frame: int in range(3):
-			await physics_frame
-		Input.action_release(action)
-		_assert(
-			player.position.is_equal_approx(rigid_start),
-			"live %s rigid boundary blocks held input" % str(rigid_input["side"])
-		)
-	var boundary_position := Vector2(
-		GameConstants.GRID_ORIGIN.x + GameConstants.CELL_SIZE * 2.0,
-		GameConstants.grid_to_world(Vector2i(1, 10)).y
-	)
-	player.position = boundary_position
-	var half_safe_effect := ExplosionEffect.new()
-	match_node._effect_root.add_child(half_safe_effect)
-	half_safe_effect.setup([Vector2i(1, 10)], Vector2i(1, 10), player)
-	_assert(half_safe_effect.get_child_count() == 0, "explosion cells use batched drawing")
-	match_node.call("_register_explosion_effect", half_safe_effect)
-	match_node.call("_resolve_explosion_hits")
-	match_node.call("_resolve_explosion_hits")
-	_assert(not player.stats.is_trapped, "one-foot explosion coverage keeps the player half-body safe")
-	match_node.call("_unregister_explosion_effect", half_safe_effect)
-	half_safe_effect.queue_free()
-	var full_hit_effect := ExplosionEffect.new()
-	match_node._effect_root.add_child(full_hit_effect)
-	full_hit_effect.setup([Vector2i(1, 10), Vector2i(2, 10)], Vector2i(1, 10), player)
-	match_node.call("_register_explosion_effect", full_hit_effect)
-	match_node.call("_resolve_explosion_hits")
-	_assert(not player.stats.is_trapped, "first full-body unsafe frame does not trap")
-	match_node.call("_resolve_explosion_hits")
-	_assert(player.stats.is_trapped, "two full-body unsafe frames trap in the live match")
-	player.rescue()
-	match_node.call("_unregister_explosion_effect", full_hit_effect)
-	full_hit_effect.queue_free()
-	var ai_actor: GameActor
-	for battle_actor: GameActor in match_node.get_actors():
-		if not battle_actor.is_player:
-			ai_actor = battle_actor
-			break
-	_assert(is_instance_valid(ai_actor), "AI actor available for overlapping-bubble collision test")
-	if is_instance_valid(ai_actor):
-		for child: Node in ai_actor.get_children():
-			if child is RuleAI:
-				(child as RuleAI).stop_thinking()
-		var overlap_cell := Vector2i(7, 6)
-		match_node.board.cells[overlap_cell.y][overlap_cell.x] = 0
-		match_node.board.cells[overlap_cell.y + 1][overlap_cell.x] = 0
-		player.position = GameConstants.grid_to_world(overlap_cell)
-		ai_actor.position = GameConstants.grid_to_world(overlap_cell)
-		_assert(match_node.request_bomb(ai_actor), "AI can place a bubble under another actor")
-		var overlap_bubble: GameBubble = match_node.board.bombs.get(overlap_cell) as GameBubble
-		player.position += Vector2(0.0, 21.0)
-		_assert(
-			match_node.board.can_actor_occupy(player.position + Vector2(0.0, 3.0), player),
-			"non-owner can finish leaving a bubble placed underfoot"
-		)
-		player.position = GameConstants.grid_to_world(overlap_cell + Vector2i.DOWN)
-		_assert(
-			not match_node.board.can_actor_occupy(player.position + Vector2(0.0, -14.0), player),
-			"non-owner cannot re-enter after fully clearing the underfoot bubble"
-		)
-		match_node.board.unregister_bubble(overlap_bubble)
-		ai_actor.stats.active_bubbles = maxi(0, ai_actor.stats.active_bubbles - 1)
-		overlap_bubble.queue_free()
-	var player_bubble_cell := Vector2i(1, 11)
-	player.position = GameConstants.grid_to_world(player_bubble_cell)
-	_assert(match_node.request_bomb(player), "player bubble accepted")
-	_assert(match_node.board.bombs.size() >= 1, "bubble registered on board")
-	Input.action_press("move_up")
-	for _step: int in range(24):
-		await physics_frame
-	Input.action_release("move_up")
+	_stop_ai(match_node)
+	match_node._simulation_time_ms = 10000.0
+	match_node.call("_spawn_due_items")
+	_assert(match_node.board.get_item_states().size() == 1, "first random item spawns at ten seconds")
+	var timed_item: ArenaItemState = match_node.board.get_item_states()[0]
 	_assert(
-		player.position.y <= GameConstants.grid_to_world(Vector2i(1, 10)).y,
-		"player can completely leave a newly placed bubble"
+		match_node.build_ai_snapshot().item_by_id(timed_item.item_id) != null,
+		"AI snapshot exposes live item state"
 	)
-	Input.action_press("move_down")
-	for _step: int in range(24):
-		await physics_frame
-	Input.action_release("move_down")
-	_assert(player.current_cell() == Vector2i(1, 10), "player cannot walk back through the bubble after leaving")
-	await create_timer(2.0).timeout
-	var chained_cell := Vector2i(1, 10)
-	player.position = GameConstants.grid_to_world(chained_cell)
-	_assert(match_node.request_bomb(player), "second bubble accepted")
-	_assert(match_node.board.bombs.has(chained_cell), "second bubble registered")
-	await create_timer(1.2).timeout
-	_assert(not match_node.board.bombs.has(chained_cell), "first explosion chained the later bubble")
-	await create_timer(0.35).timeout
-	_assert(player.stats.is_trapped or player.stats.is_dead, "explosion applied combat state")
-	if player.stats.is_trapped:
-		player.rescue()
-		_assert(not player.stats.is_trapped, "self rescue works in live match")
-	match_node.settings.map_id = MapCatalog.BELL_GARDEN
+	match_node._simulation_time_ms = 179000.0
+	match_node.call("_spawn_due_items")
+	_assert(
+		match_node.board.get_item_states().size() == 17,
+		"a full stage schedules exactly seventeen ten-second item drops"
+	)
+	match_node.board.clear_items()
+	match_node._item_rng.seed = 20260726
+	for _index: int in range(6):
+		match_node.call("_spawn_random_item")
+	var first_item_sequence: Array[String] = _item_signature(match_node.board)
+	match_node.board.clear_items()
+	match_node._item_rng.seed = 20260726
+	for _index: int in range(6):
+		match_node.call("_spawn_random_item")
+	_assert(
+		_item_signature(match_node.board) == first_item_sequence,
+		"dedicated item RNG reproduces the same seeded type and cell sequence"
+	)
+	match_node.board.clear_items()
+	var player_cell: Vector2i = player.current_cell()
+	var spawn_candidates: Array[Vector2i] = match_node.call(
+		"_item_spawn_candidates"
+	) as Array[Vector2i]
+	_assert(
+		player_cell not in spawn_candidates,
+		"item generation excludes cells occupied by an active actor"
+	)
+	var blocked_cell := Vector2i(4, 4)
+	var test_bubble := GameBubble.new()
+	test_bubble.cell = blocked_cell
+	match_node._entity_root.add_child(test_bubble)
+	match_node.board.register_bubble(test_bubble)
+	spawn_candidates = match_node.call("_item_spawn_candidates") as Array[Vector2i]
+	_assert(blocked_cell not in spawn_candidates, "item generation excludes bubble cells")
+	match_node.board.unregister_bubble(test_bubble)
+	test_bubble.queue_free()
+	var blast_cell := Vector2i(5, 4)
+	var test_effect := ExplosionEffect.new()
+	match_node._effect_root.add_child(test_effect)
+	test_effect.setup([blast_cell], blast_cell, null)
+	match_node.call("_register_explosion_effect", test_effect)
+	spawn_candidates = match_node.call("_item_spawn_candidates") as Array[Vector2i]
+	_assert(
+		blast_cell not in spawn_candidates,
+		"item generation excludes active explosion cells"
+	)
+	match_node.call("_unregister_explosion_effect", test_effect)
+	test_effect.queue_free()
+	var pickup_cell := Vector2i(6, 6)
+	player.position = GameConstants.grid_to_world(pickup_cell)
+	match_node.board.spawn_item(ArenaItemType.Value.SPEED, pickup_cell, 10000)
+	match_node.call("_resolve_item_pickups")
+	_assert(
+		player.stats.stage_speed_items == 1 and player.stats.move_speed == 175.0,
+		"player pickup applies a stacking stage-only speed bonus"
+	)
+	player.respawn(Vector2i(6, 6))
+	_assert(player.stats.move_speed == 175.0, "respawn preserves current-stage item bonuses")
+	player.position = GameConstants.grid_to_world(Vector2i(7, 6))
+	_assert(match_node.request_bomb(player), "player can place a colored bubble")
+	var bubble := match_node.board.bombs.get(Vector2i(7, 6)) as GameBubble
+	_assert(is_instance_valid(bubble) and bubble.color_id == "orange", "bubble uses player color")
+	bubble.explode_now()
+	await process_frame
+	var first_counts: Dictionary = match_node.board.get_territory_counts()
+	_assert(int(first_counts["player"]) == 9, "power-two explosion paints nine open cells")
+	var ai_actor: GameActor = _first_ai(match_node)
+	ai_actor.position = GameConstants.grid_to_world(Vector2i(10, 9))
+	ai_actor.trap(player)
+	ai_actor.finish_by_touch(player)
+	_assert(match_node.board.is_locked(Vector2i(10, 9)), "opponent defeat locks center tile")
+	_assert(
+		match_node.board.paint_owner(Vector2i(10, 9)) == PaintPalette.TEAM_PLAYER,
+		"defeat neighborhood belongs to finishing player"
+	)
+	var lock_counts: Dictionary = match_node.board.get_territory_counts()
+	_assert(int(lock_counts["player_locked"]) == 9, "center defeat locks full nine-cell neighborhood")
+	var timeout_cell := Vector2i(2, 10)
+	ai_actor.respawn(timeout_cell)
+	ai_actor.stats.invincible_until_ms = 0
+	ai_actor.trap(player)
+	ai_actor.call("_on_trap_timeout")
+	_assert(
+		not ai_actor.stats.is_dead \
+			and not ai_actor.stats.is_trapped \
+			and not match_node.board.is_locked(timeout_cell),
+		"trap timeout releases the actor and never creates permanent territory"
+	)
+	var self_cell := Vector2i(2, 2)
+	player.position = GameConstants.grid_to_world(self_cell)
+	player.trap(player)
+	player.call("_on_trap_timeout")
+	_assert(
+		not player.stats.is_dead \
+			and not player.stats.is_trapped \
+			and not match_node.board.is_locked(self_cell),
+		"self trap timeout also releases without a defeat or permanent territory"
+	)
+	match_node.run_progress.advance_with_skill(RunProgress.SKILL_SPEED, match_node._rng)
 	match_node.start_match()
 	await process_frame
-	_assert(match_node.board.map_data.map_id == MapCatalog.BELL_GARDEN, "second map restarts successfully")
-	_assert(match_node.get_actors().size() == match_node.settings.ai_count + 1, "fighters respawn after map change")
-	var ai_characters_before_restart: Array[String] = match_node._current_ai_character_ids.duplicate()
+	_stop_ai(match_node)
+	_assert(match_node.run_progress.stage_number == 2, "campaign advances to stage two")
+	_assert(match_node.get_actors().size() == 3, "stage two spawns two AI")
+	var ai_actors: Array[GameActor] = _all_ai(match_node)
+	var claim_item_id: int = match_node.board.spawn_item(
+		ArenaItemType.Value.BUBBLE,
+		Vector2i(4, 4),
+		0
+	)
+	_assert(
+		match_node.claim_item(ai_actors[0].get_instance_id(), claim_item_id, 2000),
+		"first AI can claim an available item"
+	)
+	_assert(
+		not match_node.can_claim_item(ai_actors[1].get_instance_id(), claim_item_id, 1800),
+		"teammate respects a comparable existing item ETA"
+	)
+	_assert(
+		match_node.can_claim_item(ai_actors[1].get_instance_id(), claim_item_id, 1000),
+		"meaningfully faster teammate may take over an item claim"
+	)
+	_assert(
+		match_node.claim_item(ai_actors[1].get_instance_id(), claim_item_id, 1000),
+		"faster teammate atomically takes over the item claim"
+	)
+	match_node.release_item_claim(claim_item_id, ai_actors[0].get_instance_id())
+	_assert(
+		not match_node.can_claim_item(
+			ai_actors[0].get_instance_id(),
+			claim_item_id,
+			2000
+		),
+		"former claimant cannot release the faster teammate's replacement claim"
+	)
+	match_node.board.clear_items()
+	var friendly_cell := Vector2i(8, 7)
+	ai_actors[1].position = GameConstants.grid_to_world(friendly_cell)
+	var friendly_effect := ExplosionEffect.new()
+	match_node._effect_root.add_child(friendly_effect)
+	friendly_effect.setup([friendly_cell], friendly_cell, ai_actors[0])
+	match_node.call("_register_explosion_effect", friendly_effect)
+	var source_snapshot: AIBattleSnapshot = match_node.build_ai_snapshot()
+	var source_state: AIBattleSnapshot.ExplosionState = source_snapshot.explosions[0]
+	_assert(
+		source_state.attacker_team == PaintPalette.TEAM_AI \
+			and source_state.attacker_id == ai_actors[0].get_instance_id(),
+		"AI snapshot retains the stable explosion source"
+	)
+	match_node.call("_resolve_explosion_hits")
+	match_node.call("_resolve_explosion_hits")
+	_assert(not ai_actors[1].stats.is_trapped, "AI teammate ignores friendly explosion")
+	player = match_node.get_player()
+	player.position = GameConstants.grid_to_world(friendly_cell)
+	match_node.call("_resolve_explosion_hits")
+	match_node.call("_resolve_explosion_hits")
+	_assert(player.stats.is_trapped, "player is trapped by AI explosion")
+	match_node.call("_unregister_explosion_effect", friendly_effect)
+	friendly_effect.queue_free()
+	var victory_cell := Vector2i(1, 1)
+	match_node.board.paint_cells([victory_cell], PaintPalette.TEAM_PLAYER)
+	match_node.call("_end_round")
+	_assert(match_node._last_round_won, "strictly higher player territory wins")
+	_assert(
+		player.stats.stage_speed_items == 0 and player.stats.move_speed == 160.0,
+		"round settlement removes temporary item bonuses"
+	)
+	_assert(paused, "result pauses live simulation")
+	match_node.call("_advance_stage", RunProgress.SKILL_BUBBLE)
+	await process_frame
+	_assert(match_node.run_progress.stage_number == 3, "skill confirmation enters next stage")
+	_assert(match_node.get_player().stats.move_speed == 160.0, "earlier speed point carries forward")
+	_assert(
+		match_node.get_player().stats.stage_speed_items == 0,
+		"next stage starts without previous item bonuses"
+	)
+	_assert(match_node.get_player().stats.bubble_capacity == 3, "new bubble point applies next stage")
+	var points_before_loss: int = match_node.run_progress.total_skill_points()
+	var retry_allocations: Array[Dictionary] = match_node.run_progress.ai_allocations.duplicate(true)
+	match_node.call("_end_round")
+	_assert(not match_node._last_round_won, "a neutral zero-to-zero tie fails the stage")
 	match_node.start_match()
 	await process_frame
+	_stop_ai(match_node)
 	_assert(
-		match_node._current_ai_character_ids == ai_characters_before_restart,
-		"restart preserves this round's AI character assignment"
+		match_node.run_progress.total_skill_points() == points_before_loss,
+		"tie grants no skill point"
+	)
+	match_node.board.paint_cells(
+		[Vector2i(1, 1), Vector2i(2, 1)],
+		PaintPalette.TEAM_AI
+	)
+	match_node.call("_end_round")
+	_assert(not match_node._last_round_won, "AI lead fails the stage")
+	match_node.start_match()
+	await process_frame
+	_assert(match_node.run_progress.stage_number == 3, "failure retries the same stage")
+	_assert(
+		match_node.run_progress.total_skill_points() == points_before_loss,
+		"failure grants no skill point"
+	)
+	_assert(
+		match_node.run_progress.ai_allocations == retry_allocations,
+		"retry keeps the stage AI allocation"
 	)
 	match_node.call("_enter_lobby")
-	_assert(
-		match_node._current_ai_character_ids.is_empty(),
-		"returning to the lobby clears AI characters for the next random draw"
-	)
-	var audio_manager: Node = root.get_node_or_null("AudioManager")
-	if is_instance_valid(audio_manager):
-		audio_manager.call("stop_all")
+	_assert(match_node.run_progress.ai_character_ids.is_empty(), "returning to lobby clears campaign growth")
 	match_node.queue_free()
 	await process_frame
 	await process_frame
-	print("BnBonline smoke test: %s" % ("FAILED" if _failed else "PASS"))
+	print("BnBonline paint smoke: %s" % ("FAILED" if _failed else "PASS"))
 	quit(1 if _failed else 0)
+
+
+func _stop_ai(match_node: MatchController) -> void:
+	for actor: GameActor in match_node.get_actors():
+		for child: Node in actor.get_children():
+			if child is RuleAI:
+				(child as RuleAI).stop_thinking()
+
+
+func _first_ai(match_node: MatchController) -> GameActor:
+	for actor: GameActor in match_node.get_actors():
+		if not actor.is_player:
+			return actor
+	return null
+
+
+func _all_ai(match_node: MatchController) -> Array[GameActor]:
+	var result: Array[GameActor] = []
+	for actor: GameActor in match_node.get_actors():
+		if not actor.is_player:
+			result.append(actor)
+	return result
+
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:
 		return
 	_failed = true
 	push_error("SMOKE FAILED: %s" % message)
+
+
+func _item_signature(board: GameBoard) -> Array[String]:
+	var result: Array[String] = []
+	for item: ArenaItemState in board.get_item_states():
+		result.append("%d@%d,%d" % [item.item_type, item.cell.x, item.cell.y])
+	return result

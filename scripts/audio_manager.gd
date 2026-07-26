@@ -2,28 +2,50 @@ extends Node
 ## Thin global audio service. Gameplay remains owned by the match scene.
 
 const STREAMS: Dictionary = {
-	&"start": preload("res://assets/audio/start.wav"),
-	&"appear": preload("res://assets/audio/appear.wav"),
-	&"lay": preload("res://assets/audio/lay.wav"),
-	&"explode": preload("res://assets/audio/explode.wav"),
-	&"get": preload("res://assets/audio/get.wav"),
-	&"save": preload("res://assets/audio/save.wav"),
-	&"die": preload("res://assets/audio/die.wav"),
-	&"win": preload("res://assets/audio/win.wav"),
-	&"draw": preload("res://assets/audio/draw.wav"),
+	&"start": preload("res://assets/audio/sfx/start.ogg"),
+	&"appear": preload("res://assets/audio/sfx/appear.wav"),
+	&"lay": preload("res://assets/audio/sfx/lay.wav"),
+	&"explode": preload("res://assets/audio/sfx/explode.wav"),
+	&"get": preload("res://assets/audio/sfx/get.ogg"),
+	&"save": preload("res://assets/audio/sfx/save.ogg"),
+	&"die": preload("res://assets/audio/sfx/die.ogg"),
+	&"win": preload("res://assets/audio/sfx/win.ogg"),
+	&"draw": preload("res://assets/audio/sfx/draw.ogg"),
 }
-const MUSIC: AudioStream = preload("res://assets/audio/bg.wav")
+const MUSIC: AudioStream = preload("res://assets/audio/music/battle_loop.ogg")
+const SFX_VOLUME_OFFSETS_DB: Dictionary = {
+	&"start": -2.0,
+	&"appear": -1.0,
+	&"lay": 0.0,
+	&"explode": -8.0,
+	&"get": -7.0,
+	&"save": -2.0,
+	&"die": -1.0,
+	&"win": 1.0,
+	&"draw": -1.0,
+}
+const SFX_PITCH_RANGES: Dictionary = {
+	&"appear": Vector2(0.98, 1.04),
+	&"lay": Vector2(0.98, 1.06),
+	&"explode": Vector2(1.04, 1.12),
+	&"get": Vector2(0.98, 1.08),
+}
 const SFX_POOL_SIZE: int = 12
 
 var _music_player: AudioStreamPlayer
 var _sfx_players: Array[AudioStreamPlayer] = []
 var _next_sfx_player: int = 0
+var _rng := RandomNumberGenerator.new()
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	_rng.randomize()
+	var ogg_loop_stream := MUSIC as AudioStreamOggVorbis
+	if ogg_loop_stream != null:
+		ogg_loop_stream.loop = true
 	_music_player = AudioStreamPlayer.new()
 	_music_player.stream = MUSIC
-	_music_player.volume_db = -9.0
+	_music_player.volume_db = -5.0
 	_music_player.process_mode = Node.PROCESS_MODE_ALWAYS
 	_music_player.finished.connect(play_music)
 	add_child(_music_player)
@@ -51,8 +73,15 @@ func play_sfx(sound_name: StringName, volume_db: float = -3.0) -> void:
 		return
 	var player: AudioStreamPlayer = _acquire_sfx_player()
 	player.stream = STREAMS[sound_name] as AudioStream
-	player.volume_db = volume_db
+	player.volume_db = volume_db + get_sfx_volume_offset_db(sound_name)
+	var pitch_range: Vector2 = SFX_PITCH_RANGES.get(sound_name, Vector2.ONE) as Vector2
+	player.pitch_scale = _rng.randf_range(pitch_range.x, pitch_range.y)
 	player.play()
+
+
+func get_sfx_volume_offset_db(sound_name: StringName) -> float:
+	return float(SFX_VOLUME_OFFSETS_DB.get(sound_name, 0.0))
+
 
 func _acquire_sfx_player() -> AudioStreamPlayer:
 	for offset: int in range(_sfx_players.size()):

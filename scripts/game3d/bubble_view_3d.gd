@@ -3,9 +3,6 @@ extends Node3D
 ## Hand-pressed clay water bomb with stepped fuse anticipation.
 
 const STOP_MOTION_STEP := 1.0 / 12.0
-const AQUA := Color("#59b9dd")
-const CORAL := Color("#df755e")
-
 var bubble: GameBubble
 var _initial_fuse_ms := 1
 var _visual_accumulator := 0.0
@@ -14,7 +11,7 @@ var _inner_body: MeshInstance3D
 var _outer_shell: MeshInstance3D
 var _cork_root: Node3D
 var _pressure_dimples: Array[MeshInstance3D] = []
-var _skin_color := AQUA
+var _skin_color := PaintPalette.get_color(PaintPalette.DEFAULT_PLAYER_COLOR_ID)
 var _last_progress := 0.0
 
 
@@ -23,7 +20,7 @@ func bind_bubble(logic_bubble: GameBubble) -> void:
 	name = "BubbleView3D_%s_%s" % [bubble.cell.x, bubble.cell.y]
 	position = GameConstants.grid_to_world_3d(bubble.cell, 0.37)
 	_initial_fuse_ms = maxi(1, bubble.milliseconds_until_explosion())
-	_skin_color = CORAL if bubble.skin in ["coral", "basketball"] else AQUA
+	_skin_color = PaintPalette.get_color(bubble.color_id)
 	_build_visual()
 	bubble.tree_exiting.connect(queue_free, CONNECT_ONE_SHOT)
 

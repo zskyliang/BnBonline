@@ -2,10 +2,10 @@ class_name MapData
 extends Resource
 ## Runtime map resource for the 15 by 13 arena.
 
-var map_id: String = "harbor-market"
-var display_name: String = "软陶海岛集市"
-var theme_id: String = "harbor"
-var ground_mode: String = "harbor"
+var map_id: String = "paint-arena"
+var display_name: String = "染色竞技场"
+var theme_id: String = "paint"
+var ground_mode: String = "paint"
 var ground_cells: Array[PackedInt32Array] = []
 var barrier_cells: Array[PackedInt32Array] = []
 var player_spawn: Vector2i = Vector2i(1, 11)

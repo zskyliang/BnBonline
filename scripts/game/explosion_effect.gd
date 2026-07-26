@@ -7,6 +7,8 @@ signal finished(effect: ExplosionEffect)
 var cells: Array[Vector2i] = []
 var center_cell: Vector2i
 var attacker: GameActor
+var attacker_team: int = PaintPalette.TEAM_NEUTRAL
+var color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
 var unsafe_lookup: Dictionary = {}
 
 var _elapsed: float = 0.0
@@ -15,6 +17,9 @@ func setup(new_cells: Array[Vector2i], new_center: Vector2i, new_attacker: GameA
 	cells = new_cells
 	center_cell = new_center
 	attacker = new_attacker
+	if is_instance_valid(attacker):
+		attacker_team = attacker.team_id
+		color_id = attacker.color_id
 	for cell: Vector2i in cells:
 		unsafe_lookup[cell] = true
 

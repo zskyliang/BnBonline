@@ -62,6 +62,40 @@ static func apply_to_model(root: Node3D, tint: Color) -> void:
 			)
 
 
+static func apply_character_palette(
+		root: Node3D,
+		clothing_color: Color,
+		clothing_material_names: Array[String]
+	) -> void:
+	for child: Node in root.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := child as MeshInstance3D
+		if mesh_instance.mesh == null:
+			continue
+		mesh_instance.material_override = null
+		for surface: int in range(mesh_instance.mesh.get_surface_count()):
+			var source_color := Color.WHITE
+			var material_name: String = mesh_instance.mesh.surface_get_name(surface)
+			var source := mesh_instance.mesh.surface_get_material(surface) as BaseMaterial3D
+			if source != null:
+				source_color = source.albedo_color
+				if not source.resource_name.is_empty():
+					material_name = source.resource_name
+			var output_color: Color = source_color
+			if material_name in clothing_material_names:
+				var shade_seed: int = absi(material_name.hash()) % 3
+				match shade_seed:
+					0:
+						output_color = clothing_color.lightened(0.1)
+					1:
+						output_color = clothing_color
+					_:
+						output_color = clothing_color.darkened(0.13)
+			mesh_instance.set_surface_override_material(
+				surface,
+				make(output_color, CHARACTER_ROUGHNESS)
+			)
+
+
 static func clayify_imported_model(root: Node3D, tint: Color = Color.WHITE) -> void:
 	for child in root.find_children("*", "MeshInstance3D", true, false):
 		var mesh_instance := child as MeshInstance3D

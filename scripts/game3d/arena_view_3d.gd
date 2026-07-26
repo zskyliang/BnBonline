@@ -1,29 +1,29 @@
 class_name ArenaView3D
 extends Node3D
 
+signal camera_pose_changed(azimuth: float, elevation: float, zoom: float)
+signal camera_adjustment_finished(azimuth: float, elevation: float, zoom: float)
 signal zoom_changed(percent: int)
 
-# A slight horizontal skew keeps the clay buildings visibly three-dimensional
-# while logical directions remain close to the screen's vertical/horizontal axes.
-const CAMERA_AZIMUTH_DEGREES := -5.0
-const CAMERA_ELEVATION_DEGREES := 38.0
 const CAMERA_DISTANCE := 28.0
 const CAMERA_MARGIN := 1.14
-const DEFAULT_ZOOM := 1.1
-const MIN_ZOOM := 0.85
-const MAX_ZOOM := 1.5
 const ZOOM_STEP := 0.1
+const ORBIT_SENSITIVITY_DEGREES := 0.22
 
 var board_view: BoardView3D
 var actor_root: Node3D
 var bubble_root: Node3D
 var explosion_root: Node3D
+var item_root: Node3D
 var camera: Camera3D
-var roof_occlusion_controller: RoofOcclusionController
 
 var _current_map_data: MapData
 var _fitted_camera_size: float = 20.0
-var _zoom: float = DEFAULT_ZOOM
+var _azimuth: float = MatchSettings.DEFAULT_CAMERA_AZIMUTH
+var _elevation: float = MatchSettings.DEFAULT_CAMERA_ELEVATION
+var _zoom: float = MatchSettings.DEFAULT_CAMERA_ZOOM
+var _orbit_dragging: bool = false
+var _item_views: Dictionary = {}
 
 
 func _ready() -> void:
@@ -40,38 +40,68 @@ func _ready() -> void:
 	explosion_root = ClayExplosionPool.new()
 	explosion_root.name = "ClayExplosionPool"
 	add_child(explosion_root)
-	roof_occlusion_controller = RoofOcclusionController.new()
-	roof_occlusion_controller.name = "RoofOcclusionController"
-	add_child(roof_occlusion_controller)
-	roof_occlusion_controller.bind(camera, actor_root)
+	item_root = Node3D.new()
+	item_root.name = "ArenaItemViews3D"
+	add_child(item_root)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 
 
 func bind_board(board: GameBoard) -> void:
+	var previous_board: GameBoard = board_view.board if is_instance_valid(board_view) else null
+	if is_instance_valid(previous_board):
+		if previous_board.item_spawned.is_connected(_on_item_spawned):
+			previous_board.item_spawned.disconnect(_on_item_spawned)
+		if previous_board.item_collected.is_connected(_on_item_collected):
+			previous_board.item_collected.disconnect(_on_item_collected)
+		if previous_board.items_cleared.is_connected(_clear_item_views):
+			previous_board.items_cleared.disconnect(_clear_item_views)
 	board_view.bind_board(board)
 	_current_map_data = board.map_data
+	board.item_spawned.connect(_on_item_spawned)
+	board.item_collected.connect(_on_item_collected)
+	board.items_cleared.connect(_clear_item_views)
+	_clear_item_views()
+	for item: ArenaItemState in board.get_item_states():
+		add_item(item)
 	fit_camera(_current_map_data)
 
 
 func clear_entities() -> void:
-	for root in [actor_root, bubble_root]:
+	for root: Node3D in [actor_root, bubble_root]:
 		for child in root.get_children():
 			child.queue_free()
+	_clear_item_views()
 	if explosion_root is ClayExplosionPool:
 		(explosion_root as ClayExplosionPool).release_all()
 
 
-func add_actor(actor: GameActor, character_id: String) -> ActorView3D:
+func add_actor(
+		actor: GameActor,
+		character_id: String,
+		color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
+	) -> ActorView3D:
 	var view := ActorView3D.new()
 	actor_root.add_child(view)
-	view.bind_actor(actor, character_id)
+	view.bind_actor(actor, character_id, color_id)
 	return view
 
 
 func add_bubble(bubble: GameBubble) -> BubbleView3D:
+	if not is_instance_valid(bubble) or bubble.has_exploded:
+		return null
 	var view := BubbleView3D.new()
 	bubble_root.add_child(view)
 	view.bind_bubble(bubble)
+	return view
+
+
+func add_item(item: ArenaItemState) -> ItemView3D:
+	if item == null or _item_views.has(item.item_id):
+		return null
+	var view := ItemView3D.new()
+	item_root.add_child(view)
+	view.setup(item)
+	_item_views[item.item_id] = view
 	return view
 
 
@@ -79,26 +109,91 @@ func add_explosion(effect: ExplosionEffect) -> ExplosionView3D:
 	return (explosion_root as ClayExplosionPool).spawn(effect)
 
 
+func play_defeat_burst(center_cell: Vector2i, color_id: String, raw_cells: Array) -> void:
+	var burst_cells: Array[Vector2i] = []
+	for value: Variant in raw_cells:
+		if value is Vector2i:
+			burst_cells.append(value as Vector2i)
+	if burst_cells.is_empty():
+		burst_cells.append(center_cell)
+	var effect := ExplosionEffect.new()
+	add_child(effect)
+	effect.setup(burst_cells, center_cell, null)
+	effect.color_id = color_id
+	add_explosion(effect)
+
+
 func zoom_in() -> void:
 	set_zoom(_zoom + ZOOM_STEP)
+	_emit_adjustment_finished()
 
 
 func zoom_out() -> void:
 	set_zoom(_zoom - ZOOM_STEP)
+	_emit_adjustment_finished()
 
 
 func reset_zoom() -> void:
-	set_zoom(DEFAULT_ZOOM)
+	set_zoom(MatchSettings.DEFAULT_CAMERA_ZOOM)
+	_emit_adjustment_finished()
+
+
+func reset_camera() -> void:
+	set_camera_pose(
+		MatchSettings.DEFAULT_CAMERA_AZIMUTH,
+		MatchSettings.DEFAULT_CAMERA_ELEVATION,
+		MatchSettings.DEFAULT_CAMERA_ZOOM
+	)
+	_emit_adjustment_finished()
 
 
 func set_zoom(value: float) -> void:
-	var next_zoom := clampf(value, MIN_ZOOM, MAX_ZOOM)
+	var next_zoom := clampf(
+		value,
+		MatchSettings.MIN_CAMERA_ZOOM,
+		MatchSettings.MAX_CAMERA_ZOOM
+	)
 	if is_equal_approx(next_zoom, _zoom) and is_instance_valid(camera):
 		_apply_zoom()
 		return
 	_zoom = next_zoom
 	_apply_zoom()
 	zoom_changed.emit(get_zoom_percent())
+	_emit_pose_changed()
+
+
+func set_camera_pose(azimuth: float, elevation: float, zoom: float) -> void:
+	_azimuth = clampf(
+		azimuth,
+		MatchSettings.MIN_CAMERA_AZIMUTH,
+		MatchSettings.MAX_CAMERA_AZIMUTH
+	)
+	_elevation = clampf(
+		elevation,
+		MatchSettings.MIN_CAMERA_ELEVATION,
+		MatchSettings.MAX_CAMERA_ELEVATION
+	)
+	_zoom = clampf(
+		zoom,
+		MatchSettings.MIN_CAMERA_ZOOM,
+		MatchSettings.MAX_CAMERA_ZOOM
+	)
+	fit_camera(_current_map_data)
+	_emit_pose_changed()
+
+
+func apply_camera_settings(settings: MatchSettings) -> void:
+	if settings == null:
+		return
+	set_camera_pose(
+		settings.camera_azimuth,
+		settings.camera_elevation,
+		settings.camera_zoom
+	)
+
+
+func finish_camera_adjustment() -> void:
+	_emit_adjustment_finished()
 
 
 func get_zoom() -> float:
@@ -109,12 +204,20 @@ func get_zoom_percent() -> int:
 	return roundi(_zoom * 100.0)
 
 
+func get_azimuth() -> float:
+	return _azimuth
+
+
+func get_elevation() -> float:
+	return _elevation
+
+
 func fit_camera(map_data: MapData, viewport_size_override: Vector2 = Vector2.ZERO) -> void:
 	if not is_instance_valid(camera) or map_data == null:
 		return
 	_current_map_data = map_data
-	var azimuth := deg_to_rad(CAMERA_AZIMUTH_DEGREES)
-	var elevation := deg_to_rad(CAMERA_ELEVATION_DEGREES)
+	var azimuth := deg_to_rad(_azimuth)
+	var elevation := deg_to_rad(_elevation)
 	var target := Vector3(0.0, 0.7, 0.0)
 	var target_to_camera := Vector3(
 		sin(azimuth) * cos(elevation),
@@ -150,6 +253,53 @@ func _apply_zoom() -> void:
 
 func _on_viewport_size_changed() -> void:
 	fit_camera(_current_map_data)
+
+
+func _input(event: InputEvent) -> void:
+	if not visible:
+		return
+	if event is InputEventMouseButton:
+		var mouse_button := event as InputEventMouseButton
+		if mouse_button.button_index == MOUSE_BUTTON_RIGHT:
+			_orbit_dragging = mouse_button.pressed
+			if not _orbit_dragging:
+				_emit_adjustment_finished()
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and _orbit_dragging:
+		var motion := event as InputEventMouseMotion
+		set_camera_pose(
+			_azimuth - motion.relative.x * ORBIT_SENSITIVITY_DEGREES,
+			_elevation + motion.relative.y * ORBIT_SENSITIVITY_DEGREES,
+			_zoom
+		)
+		get_viewport().set_input_as_handled()
+
+
+func _on_item_spawned(item: ArenaItemState) -> void:
+	add_item(item)
+
+
+func _on_item_collected(item: ArenaItemState, _actor_id: int) -> void:
+	var view: ItemView3D = _item_views.get(item.item_id) as ItemView3D
+	_item_views.erase(item.item_id)
+	if is_instance_valid(view):
+		view.queue_free()
+
+
+func _clear_item_views() -> void:
+	_item_views.clear()
+	if not is_instance_valid(item_root):
+		return
+	for child: Node in item_root.get_children():
+		child.queue_free()
+
+
+func _emit_pose_changed() -> void:
+	camera_pose_changed.emit(_azimuth, _elevation, _zoom)
+
+
+func _emit_adjustment_finished() -> void:
+	camera_adjustment_finished.emit(_azimuth, _elevation, _zoom)
 
 
 func _build_environment() -> void:

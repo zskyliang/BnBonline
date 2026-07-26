@@ -2,13 +2,19 @@ class_name CharacterPreview3D
 extends SubViewport
 
 var definition: CharacterDefinition
+var color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
+var _model_root: Node3D
 var _animation_player: AnimationPlayer
 var _animation_accumulator := 0.0
 const STOP_MOTION_STEP := 1.0 / 12.0
 
 
-func setup(character_definition: CharacterDefinition) -> void:
+func setup(
+		character_definition: CharacterDefinition,
+		new_color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
+	) -> void:
 	definition = character_definition
+	color_id = new_color_id
 	size = Vector2i(256, 192)
 	own_world_3d = true
 	transparent_bg = true
@@ -22,9 +28,10 @@ func setup(character_definition: CharacterDefinition) -> void:
 	if model_scene != null:
 		var model := model_scene.instantiate() as Node3D
 		if model != null:
+			_model_root = model
 			world.add_child(model)
 			_normalize_model(model)
-			ClayMaterialLibrary.apply_to_model(model, definition.theme_color)
+			_apply_palette()
 			_animation_player = _find_animation_player(model)
 			_start_idle_animation()
 	else:
@@ -38,7 +45,10 @@ func setup(character_definition: CharacterDefinition) -> void:
 	ground_mesh.radial_segments = 20
 	ground.mesh = ground_mesh
 	ground.position.y = -0.04
-	ground.material_override = ClayMaterialLibrary.make(definition.theme_color.lightened(0.62), 0.94)
+	ground.material_override = ClayMaterialLibrary.make(
+		PaintPalette.get_color(color_id).lightened(0.62),
+		0.94
+	)
 	world.add_child(ground)
 
 	var light := DirectionalLight3D.new()
@@ -74,6 +84,23 @@ func _process(delta: float) -> void:
 	while _animation_accumulator >= STOP_MOTION_STEP:
 		_animation_accumulator -= STOP_MOTION_STEP
 		_animation_player.advance(STOP_MOTION_STEP)
+
+
+func set_color_id(new_color_id: String) -> void:
+	if not PaintPalette.is_valid_color_id(new_color_id):
+		return
+	color_id = new_color_id
+	_apply_palette()
+
+
+func _apply_palette() -> void:
+	if not is_instance_valid(_model_root):
+		return
+	ClayMaterialLibrary.apply_character_palette(
+		_model_root,
+		PaintPalette.get_color(color_id),
+		definition.clothing_material_names
+	)
 
 
 func _normalize_model(model: Node3D) -> void:
@@ -144,5 +171,8 @@ func _add_placeholder(parent: Node3D) -> void:
 	mesh.height = 1.15
 	mesh_instance.mesh = mesh
 	mesh_instance.position.y = 0.58
-	mesh_instance.material_override = ClayMaterialLibrary.make(definition.theme_color, 0.92)
+	mesh_instance.material_override = ClayMaterialLibrary.make(
+		PaintPalette.get_color(color_id),
+		0.92
+	)
 	parent.add_child(mesh_instance)

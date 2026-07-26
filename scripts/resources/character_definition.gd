@@ -13,6 +13,7 @@ extends Resource
 @export var theme_color: Color = Color.WHITE
 @export var accent_color: Color = Color.WHITE
 @export var source_url: String = ""
+@export var clothing_material_names: Array[String] = []
 
 
 func configure(

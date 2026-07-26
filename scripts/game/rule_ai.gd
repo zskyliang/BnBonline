@@ -1,17 +1,18 @@
 class_name RuleAI
 extends Node
-## Rule AI with timed hazard prediction, safe routing, item racing, and pressure scoring.
+## Rule AI with timed hazard prediction, paint scoring, and safe routing.
 
 signal decision_made(mode: int, target_cell: Vector2i, score: float, elapsed_usec: int)
 
-enum Mode { EVADING, INTERACTING, COLLECTING, PRESSURING, CLEARING, PATROLLING }
+enum Mode { EVADING, PAINTING, INTERACTING, PRESSURING, PATROLLING, COLLECTING }
 
 const INVALID_CELL: Vector2i = Vector2i(-1, -1)
 const PLANNING_HORIZON_MS: int = 5500
 const PRESSURE_HORIZON_MS: int = 3000
 const ATTACK_APPROACH_MS: int = 1800
+const PAINT_APPROACH_MS: int = 1200
 const DANGER_REACTION_MS: int = 1200
-const BOMB_COOLDOWN_MS: int = 700
+const BOMB_COOLDOWN_MS: int = AITemporalPlanner.WAIT_STEP_MS * 2
 const TARGET_LOCK_MS: int = 1200
 const PRESSURE_TARGET_LOCK_MS: int = 5200
 const MAX_PRESSURE_CANDIDATES: int = 2
@@ -22,7 +23,6 @@ const MIN_MARGINAL_REACHABLE_RATIO: float = 0.10
 const PATROL_MIN_FLOW_DISTANCE: int = 3
 const PATROL_DESIRED_FLOW_DISTANCE: int = 9
 const RECENT_NAVIGATION_CELL_LIMIT: int = 7
-const MAX_ITEM_PATH_CANDIDATES: int = 3
 
 var actor: GameActor
 var board: GameBoard
@@ -81,6 +81,7 @@ var _thinking_enabled: bool = true
 var _last_navigation_cell: Vector2i = INVALID_CELL
 var _navigation_heading: Vector2i = Vector2i.ZERO
 var _recent_navigation_cells: Array[Vector2i] = []
+var _claimed_item_id: int = 0
 
 
 func setup(
@@ -151,6 +152,7 @@ func reset_for_scenario(seed: int) -> void:
 	_last_navigation_cell = INVALID_CELL
 	_navigation_heading = Vector2i.ZERO
 	_recent_navigation_cells.clear()
+	_release_item_claim()
 
 
 func stop_thinking() -> void:
@@ -166,7 +168,6 @@ func _think() -> void:
 		_clear_plan()
 		_finish_decision(started_usec)
 		return
-	match_controller.release_ai_item_claims(actor.get_instance_id())
 	var snapshot: AIBattleSnapshot = match_controller.build_ai_snapshot()
 	var self_state: AIBattleSnapshot.ActorState = snapshot.actor_by_id(actor.get_instance_id())
 	if self_state == null:
@@ -184,9 +185,13 @@ func _think() -> void:
 			_set_debug(Mode.EVADING, _plan.target_cell(), last_decision_score)
 			_finish_decision(started_usec)
 			return
-		var escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_escape_plan(
+		var escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_direct_escape_plan(
 			snapshot, forecast, current, self_state.move_speed, PLANNING_HORIZON_MS
 		)
+		if not escape.valid:
+			escape = AITemporalPlanner.find_escape_plan(
+				snapshot, forecast, current, self_state.move_speed, PLANNING_HORIZON_MS
+			)
 		if escape.valid:
 			_commit_plan(escape, Mode.EVADING, escape.target_cell(), 1000.0)
 		else:
@@ -199,16 +204,52 @@ func _think() -> void:
 		_finish_decision(started_usec)
 		return
 	_refresh_pressure_metrics(snapshot, self_state, forecast)
+	if current_mode == Mode.COLLECTING and _locked_plan_can_continue(snapshot, forecast):
+		_finish_decision(started_usec)
+		return
+	var item_decision: Dictionary = _find_item_decision(
+		snapshot,
+		self_state,
+		forecast,
+		match_controller.ai_profile.minimum_item_priority_score
+	)
+	if not item_decision.is_empty() and _commit_item_decision(item_decision):
+		_finish_decision(started_usec)
+		return
 	if _locked_plan_can_continue(snapshot, forecast):
-		if current_mode == Mode.COLLECTING:
-			match_controller.claim_ai_item(actor.get_instance_id(), decision_target)
 		_finish_decision(started_usec)
 		return
+	var paint_decision: Dictionary = _find_paint_decision(snapshot, self_state, forecast)
 	var interaction: Dictionary = _find_interaction_decision(snapshot, self_state, forecast)
-	if not interaction.is_empty():
-		_commit_decision(interaction, Mode.INTERACTING)
-		_finish_decision(started_usec)
-		return
+	var selected_kind: String = ""
+	var selected_score: float = -INF
+	for candidate: Dictionary in [
+		{"kind": "paint", "decision": paint_decision},
+		{"kind": "interaction", "decision": interaction},
+	]:
+		var decision: Dictionary = candidate["decision"] as Dictionary
+		if decision.is_empty() or float(decision.get("score", -INF)) <= selected_score:
+			continue
+		selected_kind = str(candidate["kind"])
+		selected_score = float(decision["score"])
+	match selected_kind:
+		"interaction":
+			_commit_decision(interaction, Mode.INTERACTING)
+			_finish_decision(started_usec)
+			return
+		"paint":
+			if bool(paint_decision.get("drop", false)):
+				_drop_bomb_and_escape(
+					snapshot,
+					self_state,
+					Mode.PAINTING,
+					float(paint_decision["score"]),
+					paint_decision.get("escape") as AITemporalPlanner.TimedPlan
+				)
+			else:
+				_commit_decision(paint_decision, Mode.PAINTING)
+			_finish_decision(started_usec)
+			return
 	var target: AIBattleSnapshot.ActorState = _find_enemy(snapshot, self_state)
 	var continuing_pressure: bool = target != null and _pressure_intent_is_active(self_state)
 	if continuing_pressure:
@@ -224,13 +265,6 @@ func _think() -> void:
 			else:
 				_clear_plan()
 				_set_debug(Mode.PRESSURING, current, _last_pressure_score)
-		_finish_decision(started_usec)
-		return
-	var item_decision: Dictionary = _find_item_decision(snapshot, self_state, forecast)
-	if not item_decision.is_empty():
-		var item_cell: Vector2i = item_decision["cell"] as Vector2i
-		match_controller.claim_ai_item(actor.get_instance_id(), item_cell)
-		_commit_decision(item_decision, Mode.COLLECTING)
 		_finish_decision(started_usec)
 		return
 	if current_mode == Mode.EVADING \
@@ -249,14 +283,6 @@ func _think() -> void:
 			_commit_pressure_decision(pressure, snapshot, self_state)
 			_finish_decision(started_usec)
 			return
-	var clearing: Dictionary = _find_clearing_decision(snapshot, self_state, forecast)
-	if not clearing.is_empty():
-		if bool(clearing.get("drop", false)):
-			_drop_bomb_and_escape(snapshot, self_state, Mode.CLEARING, float(clearing["score"]))
-		else:
-			_commit_decision(clearing, Mode.CLEARING)
-		_finish_decision(started_usec)
-		return
 	var patrol: Dictionary = _find_patrol_decision(snapshot, self_state, forecast, target)
 	if not patrol.is_empty():
 		_commit_decision(patrol, Mode.PATROLLING)
@@ -300,8 +326,22 @@ func _locked_plan_can_continue(
 	) -> bool:
 	if _now_ms() >= _target_locked_until_ms or _plan == null or _plan_index >= _plan.cells.size():
 		return false
-	if current_mode == Mode.COLLECTING and decision_target not in snapshot.item_cells:
-		return false
+	if current_mode == Mode.COLLECTING:
+		var elapsed_ms: int = maxi(0, _now_ms() - _plan_started_ms)
+		var remaining_travel_ms: int = maxi(
+			0,
+			_plan.travel_ms() - elapsed_ms
+		)
+		if _claimed_item_id == 0 \
+				or snapshot.item_by_id(_claimed_item_id) == null \
+				or not match_controller.claim_item(
+					actor.get_instance_id(),
+					_claimed_item_id,
+					remaining_travel_ms
+				):
+			_release_item_claim()
+			_clear_plan()
+			return false
 	return _remaining_plan_is_safe(forecast, false)
 
 
@@ -342,7 +382,10 @@ func _find_interaction_decision(
 	var best: Dictionary = {}
 	var best_score: float = -INF
 	for other: AIBattleSnapshot.ActorState in snapshot.actors:
-		if other.instance_id == self_state.instance_id or other.is_dead or not other.is_trapped:
+		if other.instance_id == self_state.instance_id \
+			or other.team_id == self_state.team_id \
+			or other.is_dead \
+			or not other.is_trapped:
 			continue
 		var plan: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_path(
 			snapshot, forecast, self_state.cell, other.cell, self_state.move_speed, 5000, 750
@@ -350,8 +393,7 @@ func _find_interaction_decision(
 		if not plan.valid:
 			continue
 		var score: float = 300.0 - float(plan.travel_ms()) / 10.0
-		if other.team_id != self_state.team_id:
-			score += 80.0
+		score += 80.0
 		if score > best_score:
 			best_score = score
 			best = {"plan": plan, "cell": other.cell, "score": score}
@@ -361,58 +403,380 @@ func _find_interaction_decision(
 func _find_item_decision(
 		snapshot: AIBattleSnapshot,
 		self_state: AIBattleSnapshot.ActorState,
-		forecast: AIHazardForecast
+		forecast: AIHazardForecast,
+		minimum_score: float = -INF
 	) -> Dictionary:
-	var ranked: Array[Dictionary] = []
-	var safe_tail_ms: int = maxi(900, forecast.latest_danger_end_ms() + 100)
-	for item_cell: Vector2i in snapshot.item_cells:
-		var item_code: int = snapshot.cells[item_cell.y][item_cell.x]
-		var value: float = _item_value(item_code)
-		if value <= 0.0:
-			continue
-		var competitor_eta: int = _best_competitor_eta(snapshot, self_state, item_cell)
-		var estimated_eta: int = ceili(
-			_manhattan(self_state.cell, item_cell) * GameConstants.CELL_SIZE \
-			/ maxf(1.0, self_state.move_speed) * 1000.0
-		)
-		var rough_score: float = value - float(estimated_eta) / 90.0
-		if estimated_eta + AITemporalPlanner.WAIT_STEP_MS < competitor_eta:
-			rough_score += 22.0
-		elif competitor_eta + AITemporalPlanner.WAIT_STEP_MS < estimated_eta:
-			rough_score -= 42.0
-		if match_controller.is_ai_item_claimed_by_other(self_state.instance_id, item_cell):
-			rough_score -= 70.0
-		if item_cell == _locked_target and _now_ms() < _target_locked_until_ms:
-			rough_score += 18.0
-		ranked.append({"cell": item_cell, "value": value, "rough_score": rough_score})
-	ranked.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
-		return float(left["rough_score"]) > float(right["rough_score"])
+	if snapshot.items.is_empty() or snapshot.remaining_round_ms <= 1000:
+		return {}
+	var profile: AIBehaviorProfile = match_controller.ai_profile
+	var maximum_travel_ms: int = mini(
+		profile.maximum_item_travel_ms,
+		snapshot.remaining_round_ms - 500
 	)
-	for index: int in range(mini(MAX_ITEM_PATH_CANDIDATES, ranked.size())):
+	if maximum_travel_ms <= 0:
+		return {}
+	var move_ms_per_cell: int = ceili(
+		GameConstants.CELL_SIZE / maxf(1.0, self_state.move_speed) * 1000.0 \
+		/ AITemporalPlanner.WAIT_STEP_MS
+	) * AITemporalPlanner.WAIT_STEP_MS
+	var ranked: Array[Dictionary] = []
+	for item: AIBattleSnapshot.ItemState in snapshot.items:
+		var travel_ms: int = _manhattan(self_state.cell, item.cell) * move_ms_per_cell
+		if travel_ms > maximum_travel_ms:
+			continue
+		if not match_controller.can_claim_item(
+				self_state.instance_id,
+				item.item_id,
+				travel_ms
+			):
+			continue
+		var score: float = profile.item_base_value \
+			+ _item_marginal_value(item, snapshot, self_state, profile) \
+			- float(travel_ms) / profile.item_travel_divisor
+		var payback_ms: int = travel_ms \
+			+ int(GameConstants.BUBBLE_FUSE_SECONDS * 1000.0)
+		if snapshot.remaining_round_ms \
+				<= payback_ms + profile.minimum_item_use_window_ms:
+			continue
+		var enemy_eta_ms: int = _nearest_enemy_item_eta(snapshot, self_state, item.cell)
+		if enemy_eta_ms <= travel_ms + profile.item_competition_window_ms:
+			score -= profile.item_competition_penalty
+		if snapshot.remaining_round_ms < payback_ms + profile.item_payback_buffer_ms:
+			var late_ratio: float = 1.0 - clampf(
+				float(snapshot.remaining_round_ms - travel_ms) / 5500.0,
+				0.0,
+				1.0
+			)
+			score -= profile.item_late_round_penalty * late_ratio
+		if item.cell == self_state.cell:
+			score += 80.0
+		ranked.append({
+			"cell": item.cell,
+			"score": score,
+			"item_id": item.item_id,
+			"travel_ms": travel_ms,
+		})
+	ranked.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		return float(left["score"]) > float(right["score"])
+	)
+	if ranked.is_empty() or float(ranked[0]["score"]) <= minimum_score:
+		return {}
+	for index: int in range(mini(3, ranked.size())):
 		var candidate: Dictionary = ranked[index]
-		var item_cell: Vector2i = candidate["cell"] as Vector2i
-		var path: Array[Vector2i] = board.find_path(self_state.cell, item_cell, actor)
+		var candidate_cell: Vector2i = candidate["cell"] as Vector2i
+		var path: Array[Vector2i] = board.find_path(self_state.cell, candidate_cell, actor)
 		var plan: AITemporalPlanner.TimedPlan = _timed_plan_from_static_path(
-			path, self_state.move_speed
+			path,
+			self_state.move_speed
 		)
 		if not plan.valid or not _timed_plan_is_safe(plan, forecast):
 			continue
 		if forecast.is_unsafe(
-				item_cell,
+				candidate_cell,
 				plan.travel_ms(),
-				maxi(plan.travel_ms() + 900, safe_tail_ms),
+				plan.travel_ms() + 500,
 				AITemporalPlanner.SAFETY_MARGIN_MS
 			):
 			continue
-		var score: float = float(candidate["value"]) - float(plan.travel_ms()) / 90.0
-		var competitor_eta: int = _best_competitor_eta(snapshot, self_state, item_cell)
-		if plan.travel_ms() + AITemporalPlanner.WAIT_STEP_MS < competitor_eta:
-			score += 22.0
-		elif competitor_eta + AITemporalPlanner.WAIT_STEP_MS < plan.travel_ms():
-			score -= 42.0
-		if item_cell == _locked_target and _now_ms() < _target_locked_until_ms:
-			score += 18.0
-		return {"plan": plan, "cell": item_cell, "score": score}
+		candidate["plan"] = plan
+		candidate["travel_ms"] = plan.travel_ms()
+		return candidate
+	return {}
+
+
+func _item_marginal_value(
+		item: AIBattleSnapshot.ItemState,
+		snapshot: AIBattleSnapshot,
+		self_state: AIBattleSnapshot.ActorState,
+		profile: AIBehaviorProfile
+	) -> float:
+	var remaining_cycles: float = clampf(
+		float(snapshot.remaining_round_ms) / 9000.0,
+		1.0,
+		5.0
+	)
+	match item.item_type:
+		ArenaItemType.Value.SPEED:
+			var eta_gain_ms: float = _speed_target_eta_gain_ms(
+				item.cell,
+				snapshot,
+				self_state
+			)
+			return profile.speed_item_value \
+				+ eta_gain_ms \
+				/ profile.speed_eta_divisor_ms \
+				* remaining_cycles \
+				* profile.speed_payback_weight
+		ArenaItemType.Value.BUBBLE:
+			var capacity_pressure: float = (
+				1.0
+				if self_state.active_bubbles >= self_state.bubble_capacity - 1
+				else 0.35
+			)
+			return profile.bubble_item_value \
+				+ capacity_pressure \
+				* remaining_cycles \
+				* profile.bubble_capacity_pressure_weight
+		ArenaItemType.Value.POWER:
+			var swing_delta: int = _best_power_swing_delta(
+				item.cell,
+				snapshot,
+				self_state
+			)
+			return profile.power_item_value \
+				+ float(swing_delta) * remaining_cycles * profile.power_swing_weight
+		_:
+			return 0.0
+
+
+func _speed_target_eta_gain_ms(
+		origin: Vector2i,
+		snapshot: AIBattleSnapshot,
+		self_state: AIBattleSnapshot.ActorState
+	) -> float:
+	var current_cell_ms: float = GameConstants.CELL_SIZE \
+		/ maxf(1.0, self_state.move_speed) * 1000.0
+	var upgraded_cell_ms: float = GameConstants.CELL_SIZE \
+		/ maxf(
+			1.0,
+			self_state.move_speed + GameConstants.SPEED_PER_STAGE_ITEM
+		) * 1000.0
+	var gain_per_cell_ms: float = current_cell_ms - upgraded_cell_ms
+	var best_gain_ms: float = 0.0
+	for y: int in range(GameConstants.GRID_ROWS):
+		for x: int in range(GameConstants.GRID_COLUMNS):
+			var cell := Vector2i(x, y)
+			if snapshot.is_paint_locked(cell):
+				continue
+			var owner_team: int = snapshot.paint_owner(cell)
+			if owner_team == self_state.team_id:
+				continue
+			var target_value: float = (
+				2.0
+				if owner_team != PaintPalette.TEAM_NEUTRAL
+				else 1.0
+			)
+			var nearby_value: float = target_value
+			for direction: Vector2i in AITemporalPlanner.CARDINAL_DIRECTIONS:
+				var neighbor: Vector2i = cell + direction
+				if not GameConstants.is_inside(neighbor) \
+						or snapshot.is_paint_locked(neighbor):
+					continue
+				var neighbor_owner: int = snapshot.paint_owner(neighbor)
+				if neighbor_owner != self_state.team_id:
+					nearby_value += (
+						2.0
+						if neighbor_owner != PaintPalette.TEAM_NEUTRAL
+						else 1.0
+					)
+			var weighted_distance: float = float(_manhattan(origin, cell)) \
+				* clampf(nearby_value / 2.0, 1.0, 4.0)
+			best_gain_ms = maxf(
+				best_gain_ms,
+				weighted_distance * gain_per_cell_ms
+			)
+	for other_item: AIBattleSnapshot.ItemState in snapshot.items:
+		if other_item.cell == origin:
+			continue
+		best_gain_ms = maxf(
+			best_gain_ms,
+			float(_manhattan(origin, other_item.cell)) * gain_per_cell_ms * 1.5
+		)
+	return minf(best_gain_ms, 2000.0)
+
+
+func _best_power_swing_delta(
+		origin: Vector2i,
+		snapshot: AIBattleSnapshot,
+		self_state: AIBattleSnapshot.ActorState
+	) -> int:
+	var best_delta: int = 0
+	var candidates: Array[Vector2i] = [origin]
+	for direction: Vector2i in AITemporalPlanner.CARDINAL_DIRECTIONS:
+		var candidate: Vector2i = origin + direction
+		if _snapshot_walkable(snapshot, candidate):
+			candidates.append(candidate)
+	for cell: Vector2i in candidates:
+		var current_blast: Array[Vector2i] = GameRules.blast_cells(
+			cell,
+			self_state.power,
+			snapshot.cells
+		)
+		var upgraded_blast: Array[Vector2i] = GameRules.blast_cells(
+			cell,
+			self_state.power + 1,
+			snapshot.cells
+		)
+		best_delta = maxi(
+			best_delta,
+			snapshot.territory_swing(upgraded_blast, self_state.team_id) \
+				- snapshot.territory_swing(current_blast, self_state.team_id)
+		)
+	return best_delta
+
+
+func _nearest_enemy_item_eta(
+		snapshot: AIBattleSnapshot,
+		self_state: AIBattleSnapshot.ActorState,
+		item_cell: Vector2i
+	) -> int:
+	var result: int = 999999
+	for other: AIBattleSnapshot.ActorState in snapshot.actors:
+		if other.team_id == self_state.team_id or other.is_dead or other.is_trapped:
+			continue
+		var cell_ms: float = GameConstants.CELL_SIZE / maxf(1.0, other.move_speed) * 1000.0
+		result = mini(result, roundi(float(_manhattan(other.cell, item_cell)) * cell_ms))
+	return result
+
+
+func _commit_item_decision(decision: Dictionary) -> bool:
+	var item_id: int = int(decision.get("item_id", 0))
+	var travel_ms: int = int(decision.get("travel_ms", 0))
+	if item_id == 0 or not match_controller.claim_item(
+			actor.get_instance_id(),
+			item_id,
+			travel_ms
+		):
+		return false
+	if _claimed_item_id != 0 and _claimed_item_id != item_id:
+		match_controller.release_item_claim(
+			_claimed_item_id,
+			actor.get_instance_id()
+		)
+	_claimed_item_id = item_id
+	_commit_decision(decision, Mode.COLLECTING)
+	return true
+
+
+func _find_paint_decision(
+		snapshot: AIBattleSnapshot,
+		self_state: AIBattleSnapshot.ActorState,
+		forecast: AIHazardForecast
+	) -> Dictionary:
+	if self_state.active_bubbles >= self_state.bubble_capacity:
+		return {}
+	if self_state.active_bubbles > 0 and not _bomb_cooldown_ready():
+		return {}
+	var profile: AIBehaviorProfile = match_controller.ai_profile
+	var available_slots: int = self_state.bubble_capacity - self_state.active_bubbles
+	var slot_pressure: float = float(available_slots) \
+		/ maxf(1.0, float(self_state.bubble_capacity))
+	# The end of a verified escape leg is the overwhelmingly preferred barrage
+	# placement. Validate it before scanning every reachable tile; with several
+	# live bubbles this also avoids rebuilding a large candidate set every tick.
+	if self_state.active_bubbles > 0 \
+			and not snapshot.is_paint_locked(self_state.cell) \
+			and board.can_place_bubble(self_state.cell):
+		var current_blast: Array[Vector2i] = GameRules.blast_cells(
+			self_state.cell, self_state.power, snapshot.cells
+		)
+		var current_swing: int = snapshot.territory_swing(
+			current_blast, self_state.team_id
+		)
+		if current_swing > 0:
+			var current_escape: AITemporalPlanner.TimedPlan = _virtual_drop_escape(
+				snapshot, self_state, forecast, self_state.cell
+			)
+			if current_escape.valid:
+				return {
+					"plan": _stationary_plan(self_state.cell),
+					"cell": self_state.cell,
+					"score": float(current_swing) * profile.paint_swing_weight \
+						+ slot_pressure * profile.bubble_slot_fill_weight \
+						+ profile.active_barrage_current_cell_bonus,
+					"drop": true,
+					"escape": current_escape,
+				}
+	var reachable: Dictionary = AITemporalPlanner.reachable_cells_fast(
+		snapshot,
+		forecast,
+		self_state.cell,
+		self_state.move_speed,
+		PAINT_APPROACH_MS
+	)
+	var pending_paint_cells: Dictionary = {}
+	for bomb: AIBattleSnapshot.BombState in snapshot.bombs:
+		var pending_blast: Array[Vector2i] = GameRules.blast_cells(
+			bomb.cell,
+			bomb.power,
+			snapshot.cells
+		)
+		for pending_cell: Vector2i in pending_blast:
+			pending_paint_cells[pending_cell] = true
+	var ranked: Array[Dictionary] = []
+	for cell: Vector2i in reachable.keys():
+		if snapshot.is_paint_locked(cell) or not board.can_place_bubble(cell):
+			continue
+		var blast: Array[Vector2i] = GameRules.blast_cells(cell, self_state.power, snapshot.cells)
+		var swing: int = snapshot.territory_swing(blast, self_state.team_id)
+		if swing <= 0:
+			continue
+		var overlap_penalty: int = 0
+		for blast_cell: Vector2i in blast:
+			if pending_paint_cells.has(blast_cell):
+				overlap_penalty += 1
+		var travel_ms: int = int(reachable[cell])
+		var overlap_scale: float = (
+			profile.active_barrage_overlap_scale
+			if self_state.active_bubbles > 0
+			else 1.0
+		)
+		var score: float = float(swing) * profile.paint_swing_weight \
+			- float(overlap_penalty) * profile.pending_overlap_penalty * overlap_scale \
+			- float(travel_ms) / profile.paint_travel_divisor \
+			+ slot_pressure * profile.bubble_slot_fill_weight \
+			+ _rng.randf_range(0.0, 3.0)
+		if cell == self_state.cell:
+			score += (
+				profile.active_barrage_current_cell_bonus
+				if self_state.active_bubbles > 0
+				else 14.0
+			)
+		ranked.append({
+			"cell": cell,
+			"score": score,
+			"swing": swing,
+		})
+	ranked.sort_custom(func(left: Dictionary, right: Dictionary) -> bool:
+		return float(left["score"]) > float(right["score"])
+	)
+	# Once a safe opening bubble is active, prefer dropping again at the end of
+	# each verified escape leg. This turns extra capacity into an actual barrage
+	# instead of spending the whole fuse walking toward a slightly better tile.
+	if self_state.active_bubbles > 0:
+		for candidate_index: int in range(ranked.size()):
+			if ranked[candidate_index]["cell"] as Vector2i == self_state.cell:
+				var current_candidate: Dictionary = ranked.pop_at(candidate_index)
+				ranked.push_front(current_candidate)
+				break
+	for index: int in range(mini(8, ranked.size())):
+		var candidate: Dictionary = ranked[index]
+		var candidate_cell: Vector2i = candidate["cell"] as Vector2i
+		if candidate_cell == self_state.cell:
+			var escape: AITemporalPlanner.TimedPlan = _virtual_drop_escape(
+				snapshot, self_state, forecast, candidate_cell
+			)
+			if _bomb_cooldown_ready() and escape.valid:
+				return {
+					"plan": _stationary_plan(candidate_cell),
+					"cell": candidate_cell,
+					"score": float(candidate["score"]),
+					"drop": true,
+					"escape": escape,
+				}
+			continue
+		var path: Array[Vector2i] = board.find_path(self_state.cell, candidate_cell, actor)
+		var plan: AITemporalPlanner.TimedPlan = _timed_plan_from_static_path(
+			path,
+			self_state.move_speed
+		)
+		if plan.valid and _timed_plan_is_safe(plan, forecast):
+			return {
+				"plan": plan,
+				"cell": candidate_cell,
+				"score": float(candidate["score"]),
+				"drop": false,
+			}
 	return {}
 
 
@@ -536,7 +900,8 @@ func _find_pressure_decision(
 			self_state.power,
 			place_ms,
 			int(GameConstants.BUBBLE_FUSE_SECONDS * 1000.0),
-			self_state.instance_id
+			self_state.instance_id,
+			self_state.team_id
 		)
 		var virtual_route: AITemporalPlanner.TimedPlan = _stationary_plan(self_state.cell)
 		if candidate_cell != self_state.cell:
@@ -658,47 +1023,6 @@ func _find_pressure_reposition(
 			continue
 		return {"plan": plan, "cell": candidate_cell, "score": float(candidate["score"])}
 	return {}
-
-
-func _find_clearing_decision(
-		snapshot: AIBattleSnapshot,
-		self_state: AIBattleSnapshot.ActorState,
-		forecast: AIHazardForecast
-	) -> Dictionary:
-	if self_state.active_bubbles >= self_state.bubble_capacity:
-		return {}
-	if not _snapshot_has_boxes(snapshot):
-		return {}
-	var reachable: Dictionary = AITemporalPlanner.reachable_cells(
-		snapshot, forecast, self_state.cell, self_state.move_speed, 5000
-	)
-	var best_cell: Vector2i = INVALID_CELL
-	var best_score: float = -INF
-	for cell: Vector2i in reachable.keys():
-		if not _has_adjacent_box(snapshot, cell):
-			continue
-		var score: float = 90.0 - float(reachable[cell]) / 80.0
-		if cell == self_state.cell:
-			score += 20.0
-		if score > best_score:
-			best_score = score
-			best_cell = cell
-	if best_cell == INVALID_CELL:
-		return {}
-	var plan: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_path(
-		snapshot, forecast, self_state.cell, best_cell, self_state.move_speed, 5000, 600
-	)
-	if not plan.valid:
-		return {}
-	var can_drop_here: bool = best_cell == self_state.cell \
-		and _bomb_cooldown_ready() \
-		and _virtual_drop_is_safe(snapshot, self_state, best_cell)
-	return {
-		"plan": plan,
-		"cell": best_cell,
-		"score": best_score,
-		"drop": can_drop_here,
-	}
 
 
 func _find_patrol_decision(
@@ -830,7 +1154,13 @@ func _drop_bomb_and_escape(
 	var current: Vector2i = self_state.cell
 	if not _bomb_cooldown_ready() or not board.can_place_bubble(current):
 		return false
-	if prechecked_escape == null and not _virtual_drop_is_safe(snapshot, self_state, current):
+	var escape: AITemporalPlanner.TimedPlan = prechecked_escape
+	if escape == null or not escape.valid:
+		var forecast: AIHazardForecast = match_controller.get_shared_ai_forecast(
+			snapshot, PLANNING_HORIZON_MS
+		)
+		escape = _virtual_drop_escape(snapshot, self_state, forecast, current)
+	if not escape.valid:
 		return false
 	var previous_active: int = actor.stats.active_bubbles
 	actor.request_ai_bomb()
@@ -839,46 +1169,38 @@ func _drop_bomb_and_escape(
 	_last_bomb_ms = _now_ms()
 	if mode == Mode.PRESSURING:
 		_pressure_locked_until_ms = _now_ms() + PRESSURE_TARGET_LOCK_MS
-	var updated_snapshot: AIBattleSnapshot = match_controller.build_ai_snapshot()
-	var updated_forecast: AIHazardForecast = match_controller.get_shared_ai_forecast(
-		updated_snapshot, PLANNING_HORIZON_MS
-	)
-	var updated_self: AIBattleSnapshot.ActorState = updated_snapshot.actor_by_id(self_state.instance_id)
-	if updated_self != null:
-		_refresh_pressure_metrics(updated_snapshot, updated_self, updated_forecast)
-	var escape: AITemporalPlanner.TimedPlan = prechecked_escape
-	if escape == null or not escape.valid:
-		escape = AITemporalPlanner.find_escape_plan(
-			updated_snapshot, updated_forecast, current, self_state.move_speed, PLANNING_HORIZON_MS
-		)
-	if escape.valid:
-		_commit_plan(escape, Mode.EVADING, escape.target_cell(), score + 100.0)
-	else:
-		_clear_plan()
-		_set_debug(mode, current, score)
+	# The route was checked against a virtual bubble with the same owner, fuse,
+	# and power, so it remains valid after the real placement.
+	_commit_plan(escape, Mode.EVADING, escape.target_cell(), score + 100.0)
 	return true
 
 
-func _virtual_drop_is_safe(
+func _virtual_drop_escape(
 		snapshot: AIBattleSnapshot,
 		self_state: AIBattleSnapshot.ActorState,
+		forecast: AIHazardForecast,
 		cell: Vector2i
-	) -> bool:
+	) -> AITemporalPlanner.TimedPlan:
 	if self_state.active_bubbles >= self_state.bubble_capacity or not board.can_place_bubble(cell):
-		return false
-	var virtual_forecast: AIHazardForecast = AIHazardForecast.build(
+		return AITemporalPlanner.TimedPlan.new()
+	var detonation_ms: int = int(GameConstants.BUBBLE_FUSE_SECONDS * 1000.0)
+	for blast_event: AIHazardForecast.BombBlast in forecast.blast_events:
+		if cell in blast_event.cells:
+			detonation_ms = mini(detonation_ms, forecast.blast_time_ms(blast_event))
+	var blast: Array[Vector2i] = GameRules.blast_cells(
+		cell, self_state.power, snapshot.cells
+	)
+	var escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_blast_escape_plan(
 		snapshot,
-		PLANNING_HORIZON_MS,
+		forecast,
 		cell,
-		self_state.power,
-		0,
-		int(GameConstants.BUBBLE_FUSE_SECONDS * 1000.0),
-		self_state.instance_id
+		blast,
+		self_state.move_speed,
+		detonation_ms
 	)
-	var escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_direct_escape_plan(
-		snapshot, virtual_forecast, cell, self_state.move_speed, PLANNING_HORIZON_MS
-	)
-	return escape.valid and escape.cells.size() > 1
+	if escape.cells.size() <= 1:
+		escape.valid = false
+	return escape
 
 
 func _allies_can_escape(
@@ -887,19 +1209,7 @@ func _allies_can_escape(
 		forecast: AIHazardForecast,
 		blast: Array[Vector2i]
 	) -> bool:
-	for ally: AIBattleSnapshot.ActorState in snapshot.actors:
-		if ally.instance_id == self_state.instance_id or ally.team_id != self_state.team_id:
-			continue
-		if ally.is_dead or ally.is_trapped or ally.cell not in blast:
-			continue
-		# Ally validation runs inside each pressure candidate. A direct, no-wait
-		# escape is conservative and avoids multiplying the full time-expanded
-		# search by every nearby teammate.
-		var escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_direct_escape_plan(
-			snapshot, forecast, ally.cell, ally.move_speed, PLANNING_HORIZON_MS
-		)
-		if not escape.valid:
-			return false
+	# AI teammates share paint and do not take friendly-fire damage.
 	return true
 
 
@@ -999,12 +1309,20 @@ func _refresh_pressure_metrics(
 		forecast: AIHazardForecast
 	) -> void:
 	_active_pressure_bubbles = 0
+	var active_threat_cells: Dictionary = {}
 	for bomb: AIBattleSnapshot.BombState in snapshot.bombs:
 		if bomb.owner_id == self_state.instance_id:
 			_active_pressure_bubbles += 1
+	for blast_event: AIHazardForecast.BombBlast in forecast.blast_events:
+		if blast_event.owner_id != self_state.instance_id:
+			continue
+		for threatened_cell: Vector2i in blast_event.cells:
+			active_threat_cells[threatened_cell] = true
 	_peak_pressure_bubbles = maxi(_peak_pressure_bubbles, _active_pressure_bubbles)
-	var active_threat: AIThreatField = AIThreatField.build(forecast, self_state.instance_id)
-	_total_threat_cells = active_threat.total_weight
+	# Live metrics only need the actually threatened cell count. Building the
+	# full three-ring pressure field here duplicated the expensive field that
+	# pressure candidate evaluation creates later and scaled poorly in barrages.
+	_total_threat_cells = float(active_threat_cells.size())
 	if _pressure_target_id == 0:
 		return
 	var target: AIBattleSnapshot.ActorState = snapshot.actor_by_id(_pressure_target_id)
@@ -1014,37 +1332,6 @@ func _refresh_pressure_metrics(
 	_pressure_target_cell = target.cell
 	if _active_pressure_bubbles == 0 and _now_ms() >= _pressure_locked_until_ms:
 		_clear_pressure_target()
-
-
-func _best_competitor_eta(
-		snapshot: AIBattleSnapshot,
-		self_state: AIBattleSnapshot.ActorState,
-		item_cell: Vector2i
-	) -> int:
-	var best: int = 999999
-	for other: AIBattleSnapshot.ActorState in snapshot.actors:
-		if other.instance_id == self_state.instance_id or other.is_dead or other.is_trapped:
-			continue
-		var travel_ms: int = ceili(
-			_manhattan(other.cell, item_cell) * GameConstants.CELL_SIZE \
-			/ maxf(1.0, other.move_speed) * 1000.0
-		)
-		best = mini(best, travel_ms)
-	return best
-
-
-func _item_value(item_code: int) -> float:
-	match item_code:
-		GameConstants.ITEM_BUBBLE:
-			if actor.stats.bubble_capacity < actor.settings.max_bubbles:
-				return 74.0 + (actor.settings.max_bubbles - actor.stats.bubble_capacity) * 2.0
-		GameConstants.ITEM_SPEED:
-			if actor.stats.move_speed < actor.settings.max_speed:
-				return 78.0 + (actor.settings.max_speed - actor.stats.move_speed) / 25.0
-		GameConstants.ITEM_POWER:
-			if actor.stats.power < actor.settings.max_power:
-				return 84.0 + (actor.settings.max_power - actor.stats.power) * 2.0
-	return 0.0
 
 
 func _update_enemy_motion(snapshot: AIBattleSnapshot, team_id: int) -> void:
@@ -1109,15 +1396,6 @@ func _path_reverses_navigation_heading(path: Array[Vector2i]) -> bool:
 	return first_step == -_navigation_heading
 
 
-func _has_adjacent_box(snapshot: AIBattleSnapshot, cell: Vector2i) -> bool:
-	for direction: Vector2i in AITemporalPlanner.CARDINAL_DIRECTIONS:
-		var neighbor: Vector2i = cell + direction
-		if GameConstants.is_inside(neighbor) \
-				and GameRules.is_destructible(snapshot.cells[neighbor.y][neighbor.x]):
-			return true
-	return false
-
-
 func _open_cells(snapshot: AIBattleSnapshot) -> Array[Vector2i]:
 	var result: Array[Vector2i] = []
 	for y: int in range(GameConstants.GRID_ROWS):
@@ -1126,14 +1404,6 @@ func _open_cells(snapshot: AIBattleSnapshot) -> Array[Vector2i]:
 			if _snapshot_walkable(snapshot, cell):
 				result.append(cell)
 	return result
-
-
-func _snapshot_has_boxes(snapshot: AIBattleSnapshot) -> bool:
-	for row: PackedInt32Array in snapshot.cells:
-		for code: int in row:
-			if GameRules.is_destructible(code):
-				return true
-	return false
 
 
 func _snapshot_walkable(snapshot: AIBattleSnapshot, cell: Vector2i) -> bool:
@@ -1208,6 +1478,8 @@ func _commit_plan(
 		score: float,
 		continuous_motion: bool = false
 	) -> void:
+	if mode != Mode.COLLECTING:
+		_release_item_claim()
 	_plan = new_plan
 	_plan_index = 1 if new_plan.cells.size() > 1 else new_plan.cells.size()
 	_plan_started_ms = _now_ms()
@@ -1225,6 +1497,7 @@ func _commit_plan(
 
 
 func _clear_plan() -> void:
+	_release_item_claim()
 	_plan = null
 	_plan_index = 0
 	_continuous_plan_motion = false
@@ -1241,6 +1514,17 @@ func _set_debug(mode: Mode, target_cell: Vector2i, score: float) -> void:
 func _finish_decision(started_usec: int) -> void:
 	last_decision_usec = Time.get_ticks_usec() - started_usec
 	decision_made.emit(current_mode, decision_target, last_decision_score, last_decision_usec)
+
+
+func _release_item_claim() -> void:
+	if _claimed_item_id == 0:
+		return
+	if is_instance_valid(match_controller) and is_instance_valid(actor):
+		match_controller.release_item_claim(
+			_claimed_item_id,
+			actor.get_instance_id()
+		)
+	_claimed_item_id = 0
 
 
 func _bomb_cooldown_ready() -> bool:

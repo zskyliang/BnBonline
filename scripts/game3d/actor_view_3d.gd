@@ -14,6 +14,7 @@ const MOVEMENT_GRACE_SECONDS := 0.12
 
 var actor: GameActor
 var definition: CharacterDefinition
+var color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
 
 var _visual_pivot: Node3D
 var _model_root: Node3D
@@ -37,9 +38,14 @@ var _movement_grace_remaining: float = 0.0
 var _is_walking: bool = false
 
 
-func bind_actor(logic_actor: GameActor, character_id: String) -> void:
+func bind_actor(
+		logic_actor: GameActor,
+		character_id: String,
+		new_color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
+	) -> void:
 	actor = logic_actor
 	definition = CharacterCatalog.get_definition(character_id)
+	color_id = new_color_id
 	name = "%sView3D" % definition.id.capitalize()
 	_build_visual()
 	if is_instance_valid(actor):
@@ -102,7 +108,11 @@ func _build_visual() -> void:
 	_model_root.name = "Model"
 	_visual_pivot.add_child(_model_root)
 	_normalize_model()
-	ClayMaterialLibrary.apply_to_model(_model_root, definition.theme_color)
+	ClayMaterialLibrary.apply_character_palette(
+		_model_root,
+		PaintPalette.get_color(color_id),
+		definition.clothing_material_names
+	)
 	_find_animation_nodes(_model_root)
 	_resolve_animations()
 
@@ -118,7 +128,7 @@ func _build_placeholder() -> void:
 	body_mesh.radial_segments = 12
 	body.mesh = body_mesh
 	body.position.y = 0.45
-	body.material_override = ClayMaterialLibrary.make(definition.theme_color, 0.92)
+	body.material_override = ClayMaterialLibrary.make(PaintPalette.get_color(color_id), 0.92)
 	_model_root.add_child(body)
 	var head := MeshInstance3D.new()
 	var head_mesh := SphereMesh.new()
@@ -288,6 +298,14 @@ func _apply_head_scale() -> void:
 
 func _apply_outer_animation() -> void:
 	_trap_sphere.visible = actor.stats.is_trapped
+	if actor.stats.is_trapped:
+		var trap_color_id: String = actor.color_id
+		if is_instance_valid(actor.last_attacker):
+			trap_color_id = actor.last_attacker.color_id
+		var trap_color: Color = PaintPalette.get_color(trap_color_id)
+		var trap_material := _trap_sphere.material_override as StandardMaterial3D
+		if trap_material != null:
+			trap_material.albedo_color = Color(trap_color, 0.26)
 	var target_rotation_z := 0.0
 	var target_scale := Vector3.ONE
 	var bob := 0.0

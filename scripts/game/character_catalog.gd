@@ -7,6 +7,16 @@ const IDS: Array[String] = [
 	"ninja", "medic", "viking", "fighter",
 ]
 const ASSET_SOURCE := "https://quaternius.com/packs/ultimatedanimatedcharacter.html"
+const CLOTHING_MATERIALS: Dictionary = {
+	"builder": ["Shirt", "Vest", "Pants"],
+	"chef": ["Clothes", "Band", "DarkClothes"],
+	"cowboy": ["Jacket", "Top", "Scarf", "Pants"],
+	"wizard": ["Clothes", "Hat"],
+	"ninja": ["Main", "Details", "Grey"],
+	"medic": ["Main"],
+	"viking": ["Light", "Main", "Pants"],
+	"fighter": ["Main", "DarkGreen", "Helmet"],
+}
 
 static var _definitions: Dictionary = {}
 
@@ -104,4 +114,8 @@ static func _add(
 		ASSET_SOURCE,
 		["Head", "mixamorig_Head"]
 	)
+	var clothing_names: Array[String] = []
+	for value: Variant in CLOTHING_MATERIALS.get(character_id, []) as Array:
+		clothing_names.append(str(value))
+	definition.clothing_material_names = clothing_names
 	_definitions[character_id] = definition

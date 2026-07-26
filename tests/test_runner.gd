@@ -1,467 +1,356 @@
 extends SceneTree
-## Lightweight headless rules and integration test runner.
+## Headless rules and progression checks for the paint campaign.
 
 var _failures: int = 0
 var _checks: int = 0
 
+
 func _initialize() -> void:
 	call_deferred("_run")
 
+
 func _run() -> void:
-	_test_map_catalog()
-	_test_settings_bounds()
-	_test_blast_propagation()
-	_test_half_body_rule()
+	_test_palette_and_settings()
+	_test_flat_map()
+	_test_blast_and_half_body_rules()
+	_test_board_paint_and_locks()
+	_test_items_and_temporary_stats()
+	_test_run_progression()
+	_test_ai_snapshot_paint_value()
 	_test_ai_hazard_forecast()
-	_test_ai_threat_field()
-	_test_temporal_pathfinding()
-	await _test_board_actor_and_items()
-	await _test_rigid_boundaries_and_depth()
-	print("BnBonline tests: %d checks, %d failures" % [_checks, _failures])
+	await _test_actor_and_bubble_rules()
+	print("BnBonline paint rules: %d checks, %d failures" % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
 
-func _test_map_catalog() -> void:
-	var harbor := MapCatalog.get_map(MapCatalog.HARBOR_MARKET)
-	var garden := MapCatalog.get_map(MapCatalog.BELL_GARDEN)
-	for map_data: MapData in [harbor, garden]:
-		_check(map_data.barrier_cells.size() == 13, "%s has 13 rows" % map_data.map_id)
-		_check(map_data.barrier_cells[0].size() == 15, "%s has 15 columns" % map_data.map_id)
-		_check(map_data.player_spawn == Vector2i(1, 11), "%s keeps the approved spawn" % map_data.map_id)
-		_check(map_data.barrier_cells[0][0] == 9, "%s uses a solid shoreline border" % map_data.map_id)
-		_check(_building_cells(map_data) == _cells_with_code(map_data, 1), "%s building footprints match rigid cells" % map_data.map_id)
-		_check(_all_play_cells_connected(map_data), "%s becomes fully connected after stalls are removed" % map_data.map_id)
-	_check(MapCatalog.count_code(harbor, 3) == 28, "harbor market has 28 destructible stalls")
-	_check(MapCatalog.count_code(garden, 3) == 23, "bell garden has 23 destructible stalls")
-	_check(MapCatalog.get_map("classic").map_id == MapCatalog.HARBOR_MARKET, "classic migrates to harbor market")
-	_check(MapCatalog.get_map("windmill-heart").map_id == MapCatalog.BELL_GARDEN, "windmill heart migrates to bell garden")
 
-func _test_settings_bounds() -> void:
+func _test_palette_and_settings() -> void:
+	_check(PaintPalette.COLOR_IDS.size() == 7, "palette exposes exactly seven colors")
+	var unique_colors: Dictionary = {}
+	for color_id: String in PaintPalette.COLOR_IDS:
+		_check(PaintPalette.is_valid_color_id(color_id), "%s is a valid paint color" % color_id)
+		unique_colors[PaintPalette.get_color(color_id).to_html()] = true
+	_check(unique_colors.size() == 7, "all seven paint colors are visually distinct")
+	_check(
+		MatchSettings.WEB_STORAGE_KEY == "bnb.settings.v5" \
+			and "bnb.settings.v4" in MatchSettings.LEGACY_WEB_STORAGE_KEYS \
+			and "bnb.settings.v3" in MatchSettings.LEGACY_WEB_STORAGE_KEYS \
+			and "bnb.settings.v2" in MatchSettings.LEGACY_WEB_STORAGE_KEYS,
+		"web camera settings migrate from v4, v3, and v2 into v5"
+	)
+	var legacy_settings := MatchSettings.new()
+	legacy_settings.apply_dictionary({"character_id": "ninja"})
+	_check(
+		legacy_settings.camera_azimuth == MatchSettings.DEFAULT_CAMERA_AZIMUTH \
+			and legacy_settings.camera_elevation == MatchSettings.DEFAULT_CAMERA_ELEVATION \
+			and legacy_settings.camera_zoom == MatchSettings.DEFAULT_CAMERA_ZOOM,
+		"legacy settings without camera fields receive the current defaults"
+	)
 	var settings := MatchSettings.new()
-	settings.map_id = "missing"
-	settings.ai_count = 99
-	settings.max_speed = 20
-	settings.max_bubbles = 50
-	settings.max_power = 1
-	settings.bubble_skin = "missing"
-	settings.normalize()
-	_check(settings.map_id == MapCatalog.HARBOR_MARKET, "invalid map falls back")
-	_check(settings.ai_count == 4, "AI count clamps to four")
-	_check(settings.max_speed == 150, "speed cap clamps to initial speed")
-	_check(settings.max_bubbles == 20, "bubble cap clamps to twenty")
-	_check(settings.max_power == 2, "power cap clamps to initial power")
-	_check(settings.bubble_skin == "aqua", "invalid skin falls back")
+	settings.apply_dictionary({
+		"character_id": "wizard",
+		"player_color_id": "purple",
+		"map_id": "bell-garden",
+		"bubble_skin": "coral",
+		"camera_azimuth": 999.0,
+		"camera_elevation": -999.0,
+		"camera_zoom": 9.0,
+	})
+	_check(settings.character_id == "wizard", "legacy dictionaries preserve character selection")
+	_check(settings.player_color_id == "purple", "paint color survives settings application")
+	settings.apply_dictionary({"character_id": "missing", "player_color_id": "missing"})
+	_check(settings.character_id == "builder", "invalid character falls back")
+	_check(
+		settings.player_color_id == PaintPalette.DEFAULT_PLAYER_COLOR_ID,
+		"invalid paint color falls back"
+	)
+	_check(
+		settings.camera_azimuth == MatchSettings.MAX_CAMERA_AZIMUTH \
+			and settings.camera_elevation == MatchSettings.MIN_CAMERA_ELEVATION \
+			and settings.camera_zoom == MatchSettings.MAX_CAMERA_ZOOM,
+		"camera settings clamp corrupt or legacy values"
+	)
+	_check(
+		settings.to_dictionary().keys().size() == 5,
+		"appearance and all three camera values are persisted"
+	)
 
-func _test_blast_propagation() -> void:
+
+func _test_flat_map() -> void:
+	var map_data: MapData = MapCatalog.get_map()
+	_check(map_data.map_id == MapCatalog.PAINT_ARENA, "single paint arena has the stable ID")
+	_check(map_data.building_units.is_empty(), "paint arena has no buildings")
+	_check(map_data.decorations.is_empty(), "paint arena has no decorations")
+	var open_count: int = 0
+	for row: PackedInt32Array in map_data.barrier_cells:
+		for code: int in row:
+			if code == 0:
+				open_count += 1
+	_check(open_count == 195, "all 195 floor cells are open")
+	_check(MapCatalog.get_options().size() == 1, "map selection has been retired")
+
+
+func _test_blast_and_half_body_rules() -> void:
 	var cells: Array[PackedInt32Array] = []
 	for _y: int in range(GameConstants.GRID_ROWS):
 		var row := PackedInt32Array()
 		row.resize(GameConstants.GRID_COLUMNS)
 		row.fill(0)
 		cells.append(row)
-	cells[6][9] = 1
-	cells[6][5] = 3
-	var blast: Array[Vector2i] = GameRules.blast_cells(Vector2i(7, 6), 5, cells)
-	_check(Vector2i(8, 6) in blast, "empty cell is included in blast")
-	_check(Vector2i(9, 6) not in blast, "rigid barrier blocks and is excluded")
-	_check(Vector2i(5, 6) in blast, "destructible barrier is included")
-	_check(Vector2i(4, 6) not in blast, "blast stops after destructible barrier")
-	_check(Vector2i(7, 1) in blast, "each direction keeps its own edge range")
-	# A bomb in a covered empty cell is discoverable for chain detonation.
-	_check(Vector2i(7, 4) in blast, "covered bubble cell supports chaining")
-
-func _test_half_body_rule() -> void:
+	var blast: Array[Vector2i] = GameRules.blast_cells(Vector2i(7, 6), 2, cells)
+	_check(blast.size() == 9, "power two paints center plus two cells in four directions")
+	_check(Vector2i(9, 6) in blast, "open arena blast reaches full horizontal power")
+	var edge_blast: Array[Vector2i] = GameRules.blast_cells(Vector2i.ZERO, 3, cells)
+	_check(edge_blast.size() == 7, "edge blast clips to arena bounds")
+	var unsafe: Dictionary = {Vector2i(2, 2): true}
 	var boundary_position := Vector2(
-		GameConstants.GRID_ORIGIN.x + 6.0 * GameConstants.CELL_SIZE,
-		GameConstants.GRID_ORIGIN.y + 5.5 * GameConstants.CELL_SIZE
+		GameConstants.GRID_ORIGIN.x + GameConstants.CELL_SIZE * 3.0,
+		GameConstants.grid_to_world(Vector2i(2, 2)).y
 	)
-	var feet: Array[Vector2i] = GameRules.foot_cells(boundary_position)
-	_check(feet[0] != feet[1], "feet sample opposite sides of a boundary")
-	var unsafe: Dictionary = {feet[0]: true}
-	_check(not GameRules.both_feet_unsafe(boundary_position, unsafe), "one unsafe foot remains safe")
-	unsafe[feet[1]] = true
-	_check(GameRules.both_feet_unsafe(boundary_position, unsafe), "two unsafe feet are unsafe")
+	_check(
+		not GameRules.both_feet_unsafe(boundary_position, unsafe),
+		"one-foot coverage remains half-body safe"
+	)
+	unsafe[Vector2i(3, 2)] = true
+	_check(
+		GameRules.both_feet_unsafe(boundary_position, unsafe),
+		"both covered feet remain unsafe"
+	)
+	_check(GameConstants.ROUND_SECONDS == 180.0, "each stage lasts exactly three minutes")
+
+
+func _test_board_paint_and_locks() -> void:
+	var board := GameBoard.new()
+	root.add_child(board)
+	board.configure_team_colors("red", "blue")
+	board.reset(MapCatalog.get_map())
+	var counts: Dictionary = board.get_territory_counts()
+	_check(int(counts["neutral"]) == 195, "new stage starts with 195 neutral cells")
+	var stripe: Array[Vector2i] = [
+		Vector2i(4, 4),
+		Vector2i(5, 4),
+		Vector2i(6, 4),
+	]
+	var first_paint: Dictionary = board.paint_cells(stripe, PaintPalette.TEAM_PLAYER)
+	_check(first_paint.size() == 3, "explosion paints every mutable target once")
+	_check(board.paint_owner(Vector2i(5, 4)) == PaintPalette.TEAM_PLAYER, "player owns painted tile")
+	_check(
+		board.territory_swing(stripe, PaintPalette.TEAM_AI) == 6,
+		"covering three opposing tiles produces six points of net swing"
+	)
+	board.paint_cells(stripe, PaintPalette.TEAM_AI)
+	_check(board.paint_owner(Vector2i(5, 4)) == PaintPalette.TEAM_AI, "later paint overwrites mutable tile")
+	var locked: Dictionary = board.lock_neighborhood(Vector2i.ZERO, PaintPalette.TEAM_PLAYER)
+	_check(locked.size() == 4, "corner defeat clips the locked neighborhood to four cells")
+	_check(board.is_locked(Vector2i.ZERO), "defeat tile is marked locked")
+	board.paint_cells([Vector2i.ZERO], PaintPalette.TEAM_AI)
+	_check(
+		board.paint_owner(Vector2i.ZERO) == PaintPalette.TEAM_PLAYER,
+		"locked ownership cannot be overwritten"
+	)
+	var second_lock: Dictionary = board.lock_neighborhood(Vector2i.ZERO, PaintPalette.TEAM_AI)
+	_check(second_lock.is_empty(), "earliest lock wins every lock conflict")
+	counts = board.get_territory_counts()
+	_check(int(counts["player_locked"]) == 4, "locked cells count toward player territory")
+	_check(int(counts["player"]) + int(counts["ai"]) + int(counts["neutral"]) == 195, "territory counts conserve all cells")
+	board.queue_free()
+
+
+func _test_items_and_temporary_stats() -> void:
+	var board := GameBoard.new()
+	root.add_child(board)
+	board.reset(MapCatalog.get_map())
+	var cell := Vector2i(5, 5)
+	var item_id: int = board.spawn_item(ArenaItemType.Value.SPEED, cell, 10000)
+	_check(item_id > 0, "board assigns a stable item id")
+	_check(board.is_cell_walkable(cell), "item cells remain walkable")
+	_check(not board.can_place_bubble(cell), "item cells temporarily reject bubble placement")
+	board.paint_cells([cell], PaintPalette.TEAM_PLAYER)
+	board.lock_neighborhood(cell, PaintPalette.TEAM_PLAYER)
+	_check(board.item_at(cell) != null, "painting and locking do not destroy items")
+	var taken: ArenaItemState = board.take_item(cell, 77)
+	_check(
+		taken != null and taken.item_id == item_id and taken.spawned_ms == 10000,
+		"atomic pickup returns stable item state"
+	)
+	_check(board.take_item(cell, 88) == null, "a collected item cannot be taken twice")
+	_check(board.can_place_bubble(cell), "bubble placement reopens after pickup")
+	var stats := ActorStats.new()
+	stats.apply_skill_points(2, 1, 3)
+	_check(stats.move_speed == 170.0, "campaign allocation establishes the stage base")
+	stats.apply_stage_item(ArenaItemType.Value.SPEED)
+	stats.apply_stage_item(ArenaItemType.Value.SPEED)
+	stats.apply_stage_item(ArenaItemType.Value.BUBBLE)
+	stats.apply_stage_item(ArenaItemType.Value.POWER)
+	_check(stats.move_speed == 220.0, "speed items stack by twenty-five without a cap")
+	_check(stats.bubble_capacity == 4, "bubble item stacks on campaign capacity")
+	_check(stats.power == 6, "power item stacks on campaign power")
+	stats.clear_stage_item_bonuses()
+	_check(
+		stats.move_speed == 170.0 and stats.bubble_capacity == 3 and stats.power == 5,
+		"stage cleanup restores campaign values without removing skill points"
+	)
+	_check(
+		GameConstants.ITEM_SPAWN_INTERVAL_SECONDS == 10.0,
+		"items use the required ten-second cadence"
+	)
+	board.queue_free()
+
+
+func _test_run_progression() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20260725
+	var progress := RunProgress.new()
+	progress.begin("ninja", "cyan", rng)
+	_check(progress.stage_number == 1, "campaign begins at stage one")
+	_check(progress.ai_count() == 1, "stage one has one AI")
+	_check(progress.ai_color_id != "cyan", "AI color differs from player color")
+	_check(progress.ai_character_ids.size() == 4, "four stable AI identities are prepared")
+	_check("ninja" not in progress.ai_character_ids, "AI roster excludes player character")
+	var stats := ActorStats.new()
+	progress.apply_allocation(stats, progress.player_allocation())
+	_check(stats.move_speed == 150.0, "campaign uses base speed")
+	_check(stats.bubble_capacity == 2, "campaign uses base bubble count")
+	_check(stats.power == 2, "campaign uses base power")
+	_check(progress.advance_with_skill(RunProgress.SKILL_SPEED, rng), "speed skill advances campaign")
+	progress.apply_allocation(stats, progress.player_allocation())
+	_check(stats.move_speed == 160.0, "speed point adds ten pixels per second")
+	_check(progress.stage_number == 2 and progress.ai_count() == 2, "stage two adds the second AI")
+	var stage_two_allocations: Array[Dictionary] = progress.ai_allocations.duplicate(true)
+	_check(_allocation_total(progress.ai_allocation(0)) == 1, "each AI receives all earned points")
+	_check(progress.ai_allocations == stage_two_allocations, "reading allocations does not reroll retry state")
+	progress.advance_with_skill(RunProgress.SKILL_BUBBLE, rng)
+	progress.advance_with_skill(RunProgress.SKILL_POWER, rng)
+	_check(progress.stage_number == 4 and progress.ai_count() == 4, "stage four reaches four-AI cap")
+	for allocation: Dictionary in progress.ai_allocations:
+		_check(_allocation_total(allocation) == 3, "every AI independently owns three points")
+	progress.advance_with_skill(RunProgress.SKILL_BUBBLE, rng)
+	_check(progress.stage_number == 5 and progress.ai_count() == 4, "later stages remain capped at four AI")
+	progress.apply_allocation(stats, progress.player_allocation())
+	_check(stats.bubble_capacity == 4, "bubble points stack without the old cap")
+	_check(stats.power == 3, "power point carries into later stages")
+	var long_run := RunProgress.new()
+	long_run.begin("builder", "red", rng)
+	for _point: int in range(25):
+		long_run.advance_with_skill(RunProgress.SKILL_SPEED, rng)
+	long_run.apply_allocation(stats, long_run.player_allocation())
+	_check(stats.move_speed == 400.0, "long campaigns keep stacking speed")
+
+
+func _test_ai_snapshot_paint_value() -> void:
+	var snapshot := AIBattleSnapshot.new()
+	for _y: int in range(GameConstants.GRID_ROWS):
+		var cell_row := PackedInt32Array()
+		cell_row.resize(GameConstants.GRID_COLUMNS)
+		cell_row.fill(0)
+		snapshot.cells.append(cell_row)
+		var owner_row := PackedInt32Array()
+		owner_row.resize(GameConstants.GRID_COLUMNS)
+		owner_row.fill(PaintPalette.TEAM_NEUTRAL)
+		snapshot.paint_owners.append(owner_row)
+		var lock_row := PackedByteArray()
+		lock_row.resize(GameConstants.GRID_COLUMNS)
+		lock_row.fill(0)
+		snapshot.locked_cells.append(lock_row)
+	var targets: Array[Vector2i] = [Vector2i(2, 2), Vector2i(3, 2), Vector2i(4, 2)]
+	snapshot.paint_owners[2][3] = PaintPalette.TEAM_PLAYER
+	snapshot.paint_owners[2][4] = PaintPalette.TEAM_AI
+	_check(
+		snapshot.territory_swing(targets, PaintPalette.TEAM_AI) == 3,
+		"AI values neutral as one, opposing as two, and own as zero"
+	)
+	snapshot.locked_cells[2][3] = 1
+	_check(snapshot.territory_swing(targets, PaintPalette.TEAM_AI) == 1, "AI excludes locked paint")
+
 
 func _test_ai_hazard_forecast() -> void:
-	var snapshot: AIBattleSnapshot = _empty_ai_snapshot()
-	snapshot.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(2, 2), 2, 600, 1, 0))
-	snapshot.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(10, 8), 2, 1700, 2, 1))
-	var forecast: AIHazardForecast = AIHazardForecast.build(snapshot, 3000)
-	_check(forecast.danger_eta_ms(Vector2i(2, 2)) == 600, "first bubble keeps its distinct fuse")
-	_check(forecast.danger_eta_ms(Vector2i(10, 8)) == 1700, "later bubble keeps its distinct fuse")
-	_check(
-		forecast.is_unsafe(Vector2i(2, 3), 600, 1050),
-		"blast cell remains unsafe for the full explosion interval"
-	)
-	forecast.set_time_offset_ms(200)
-	_check(forecast.danger_eta_ms(Vector2i(2, 2)) == 400, "cached forecast shifts fuse ETA by its age")
-	_check(
-		forecast.is_unsafe(Vector2i(2, 3), 400, 850),
-		"cached forecast shifts unsafe intervals without rebuilding"
-	)
-	var shifted_field: AIThreatField = AIThreatField.build(forecast, 1)
-	_check(
-		is_equal_approx(shifted_field.weight_at(Vector2i(2, 2)), 1.0),
-		"cached forecast keeps threat expansion aligned to shifted blast time"
-	)
-	forecast.set_time_offset_ms(1100)
-	_check(
-		forecast.danger_eta_ms(Vector2i(2, 2)) == AIHazardForecast.NO_DANGER_MS,
-		"expired cached danger is discarded after its full interval"
-	)
-	var chain_snapshot: AIBattleSnapshot = _empty_ai_snapshot()
-	chain_snapshot.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(2, 2), 3, 500, 1, 0))
-	chain_snapshot.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(5, 2), 2, 2400, 2, 1))
-	var chain_forecast: AIHazardForecast = AIHazardForecast.build(chain_snapshot, 3000)
-	_check(
-		chain_forecast.danger_eta_ms(Vector2i(6, 2)) == 500,
-		"earlier blast pulls a later bubble into the chain timeline"
-	)
-	var ordered_snapshot: AIBattleSnapshot = _empty_ai_snapshot()
-	ordered_snapshot.cells[3][4] = 3
-	ordered_snapshot.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(2, 3), 2, 500, 1, 0))
-	ordered_snapshot.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(6, 3), 4, 500, 2, 1))
-	var ordered_forecast: AIHazardForecast = AIHazardForecast.build(ordered_snapshot, 2000)
-	_check(
-		ordered_forecast.danger_eta_ms(Vector2i(3, 3)) == 500,
-		"same-time later blast propagates through a box destroyed by the first blast"
-	)
-	var active_snapshot: AIBattleSnapshot = _empty_ai_snapshot()
-	active_snapshot.explosions.append(AIBattleSnapshot.ExplosionState.new(
-		[Vector2i(4, 4)], 275
-	))
-	var active_forecast: AIHazardForecast = AIHazardForecast.build(active_snapshot, 1000)
-	_check(active_forecast.danger_eta_ms(Vector2i(4, 4)) == 0, "active water column is dangerous now")
-	_check(
-		not active_forecast.is_unsafe(Vector2i(4, 4), 276, 500),
-		"active water column clears after its remaining lifetime"
-	)
-
-func _test_temporal_pathfinding() -> void:
-	var corridor: AIBattleSnapshot = _empty_ai_snapshot(1)
-	for x: int in range(3):
-		corridor.cells[0][x] = 0
-	corridor.cells[1][1] = 0
-	corridor.cells[2][1] = 0
-	corridor.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(1, 2), 2, 500, 1, 0))
-	var corridor_forecast: AIHazardForecast = AIHazardForecast.build(corridor, 2500)
-	var waited_plan: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_path(
-		corridor, corridor_forecast, Vector2i(0, 0), Vector2i(2, 0), 150.0, 2500, 300
-	)
-	_check(waited_plan.valid, "time-expanded path can wait for a blast to clear")
-	_check(
-		waited_plan.cells.size() > 1 and waited_plan.cells[1] == Vector2i(0, 0),
-		"safe plan encodes a wait action instead of entering a future blast"
-	)
-	_check(
-		waited_plan.travel_ms() > corridor_forecast.latest_danger_end_ms(),
-		"unsafe item-like target is delayed until its complete danger window clears"
-	)
-	var open_snapshot: AIBattleSnapshot = _empty_ai_snapshot()
-	var virtual_forecast: AIHazardForecast = AIHazardForecast.build(
-		open_snapshot, 5000, Vector2i(7, 6), 3, 0, 3000
-	)
-	var escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_escape_plan(
-		open_snapshot, virtual_forecast, Vector2i(7, 6), 150.0, 5000
-	)
-	_check(escape.valid and escape.cells.size() > 1, "newly placed bubble has a complete escape plan")
-	_check(
-		not virtual_forecast.is_unsafe(escape.target_cell(), 0, virtual_forecast.latest_danger_end_ms(), 100),
-		"escape plan ends in a cell safe through all predicted explosions"
-	)
-	var direct_escape: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_direct_escape_plan(
-		open_snapshot, virtual_forecast, Vector2i(7, 6), 150.0, 5000
-	)
-	_check(
-		direct_escape.valid and direct_escape.cells.size() > 1,
-		"proactive bombing can use a fast no-wait escape with complete interval checks"
-	)
-	var reachable_now: Dictionary = AITemporalPlanner.reachable_cells(
-		open_snapshot, AIHazardForecast.build(open_snapshot), Vector2i(7, 6), 150.0, 600, 0, true
-	)
-	_check(reachable_now.size() > 1, "terminal reachable-area query returns future safe positions")
-
-func _test_ai_threat_field() -> void:
-	var snapshot: AIBattleSnapshot = _empty_ai_snapshot()
-	snapshot.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(7, 6), 1, 1000, 1, 0))
-	var forecast: AIHazardForecast = AIHazardForecast.build(snapshot, 4000)
-	var field: AIThreatField = AIThreatField.build(forecast, 1)
-	_check(is_equal_approx(field.weight_at(Vector2i(7, 6)), 1.0), "direct blast cell has full threat")
-	_check(is_equal_approx(field.weight_at(Vector2i(8, 7)), 0.5), "first threat ring decays to one half")
-	_check(is_equal_approx(field.weight_at(Vector2i(9, 7)), 0.25), "second threat ring decays to one quarter")
-	_check(is_equal_approx(field.weight_at(Vector2i(10, 7)), 0.125), "third threat ring decays to one eighth")
-	_check(is_zero_approx(field.weight_at(Vector2i(11, 7))), "threat stops after the third ring")
-	var relevant: Dictionary = {
-		Vector2i(8, 7): true,
-		Vector2i(9, 7): true,
-	}
-	_check(is_equal_approx(field.coverage_ratio(relevant), 0.375), "reachable-cell threat coverage is normalized")
-	var blocked: AIBattleSnapshot = _empty_ai_snapshot()
-	blocked.cells[2][3] = 1
-	blocked.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(2, 2), 0, 1000, 1, 0))
-	var blocked_field: AIThreatField = AIThreatField.build(
-		AIHazardForecast.build(blocked, 4000), 1
-	)
-	_check(is_zero_approx(blocked_field.weight_at(Vector2i(4, 2))), "rigid wall blocks threat-ring expansion")
-	var overlapping: AIBattleSnapshot = _empty_ai_snapshot()
-	overlapping.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(7, 6), 0, 800, 1, 0))
-	overlapping.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(7, 6), 0, 1200, 1, 1))
-	var overlapping_field: AIThreatField = AIThreatField.build(
-		AIHazardForecast.build(overlapping, 3000), 1
-	)
-	_check(
-		is_equal_approx(overlapping_field.weight_at(Vector2i(8, 6)), 0.75),
-		"overlapping bubbles use saturating threat accumulation"
-	)
-	var single_overlap: AIBattleSnapshot = _empty_ai_snapshot()
-	single_overlap.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(7, 6), 0, 800, 1, 0))
-	var single_overlap_field: AIThreatField = AIThreatField.build(
-		AIHazardForecast.build(single_overlap, 3000), 1
-	)
-	_check(
-		is_equal_approx(
-			overlapping_field.marginal_weight(single_overlap_field, {Vector2i(8, 6): true}),
-			0.25
-		),
-		"threat field exposes marginal pressure on a relevant region"
-	)
-	var timed_boxes: AIBattleSnapshot = _empty_ai_snapshot()
-	timed_boxes.cells[2][3] = 3
-	timed_boxes.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(2, 2), 1, 500, 2, 0))
-	timed_boxes.bombs.append(AIBattleSnapshot.BombState.new(Vector2i(4, 2), 0, 1000, 1, 1))
-	var timed_field: AIThreatField = AIThreatField.build(
-		AIHazardForecast.build(timed_boxes, 3000), 1
-	)
-	_check(
-		is_equal_approx(timed_field.weight_at(Vector2i(2, 2)), 0.25),
-		"threat rings use boxes destroyed before the owning bubble explodes"
-	)
-
-func _empty_ai_snapshot(fill_code: int = 0) -> AIBattleSnapshot:
 	var snapshot := AIBattleSnapshot.new()
 	for _y: int in range(GameConstants.GRID_ROWS):
 		var row := PackedInt32Array()
 		row.resize(GameConstants.GRID_COLUMNS)
-		row.fill(fill_code)
+		row.fill(0)
 		snapshot.cells.append(row)
-	return snapshot
+	snapshot.bombs.append(
+		AIBattleSnapshot.BombState.new(Vector2i(7, 6), 2, 1000, 1, 0)
+	)
+	var forecast: AIHazardForecast = AIHazardForecast.build(snapshot, 4000)
+	_check(forecast.danger_eta_ms(Vector2i(7, 6)) == 1000, "forecast preserves real fuse")
+	_check(forecast.danger_eta_ms(Vector2i(9, 6)) == 1000, "forecast covers open blast arm")
+	_check(forecast.danger_eta_ms(Vector2i(10, 6)) > 1000, "forecast stops at configured power")
 
-func _test_board_actor_and_items() -> void:
+
+func _test_actor_and_bubble_rules() -> void:
 	var board := GameBoard.new()
 	root.add_child(board)
-	board.reset(MapCatalog.get_map(MapCatalog.HARBOR_MARKET))
+	board.reset(MapCatalog.get_map())
 	var settings := MatchSettings.new()
-	var actor := GameActor.new()
-	root.add_child(actor)
-	var spawn := Vector2i(1, 11)
-	var destructible := Vector2i(4, 11)
-	actor.setup("测试玩家", 1, true, board, settings, spawn)
-	_check(board.can_actor_occupy(GameConstants.grid_to_world(spawn), actor), "actor can occupy spawn")
-	_check(not board.can_actor_occupy(GameConstants.grid_to_world(destructible), actor), "actor cannot occupy a stall")
-	var item_code: int = board.destroy_cell(destructible)
-	_check(item_code in [101, 102, 103], "destroyed box creates a valid upgrade")
-	_check(board.take_item(destructible) == item_code, "upgrade can be collected")
-	_check(board.cell_code(destructible) == 0, "collected upgrade clears the cell")
+	var player := GameActor.new()
+	root.add_child(player)
+	player.setup(
+		"玩家",
+		PaintPalette.TEAM_PLAYER,
+		true,
+		board,
+		settings,
+		Vector2i(1, 1),
+		"red"
+	)
+	var enemy := GameActor.new()
+	root.add_child(enemy)
+	enemy.setup(
+		"AI",
+		PaintPalette.TEAM_AI,
+		false,
+		board,
+		settings,
+		Vector2i(2, 1),
+		"blue"
+	)
 	var bubble := GameBubble.new()
 	root.add_child(bubble)
-	var overlapping_actor := GameActor.new()
-	root.add_child(overlapping_actor)
-	overlapping_actor.setup("重叠角色", 2, false, board, settings, spawn)
-	var outside_actor := GameActor.new()
-	root.add_child(outside_actor)
-	outside_actor.setup("外部角色", 2, false, board, settings, Vector2i(1, 10))
-	bubble.setup(actor, spawn, "aqua", GameConstants.BUBBLE_FUSE_SECONDS, [actor, overlapping_actor])
-	board.register_bubble(bubble)
-	overlapping_actor.position = GameConstants.grid_to_world(spawn) + Vector2(0.0, -21.0)
-	_check(
-		board.can_actor_occupy(overlapping_actor.position + Vector2(0.0, -3.0), overlapping_actor),
-		"another actor overlapping a newly placed bubble can finish exiting"
+	bubble.setup(player, Vector2i(1, 1), 10.0, [player])
+	_check(bubble.owner_team == PaintPalette.TEAM_PLAYER, "bubble stores stable owner team")
+	_check(bubble.color_id == "red", "bubble inherits owner color")
+	_check(bubble.power == player.stats.power, "bubble snapshots owner power")
+	player.register_unsafe_frame(enemy)
+	_check(not player.stats.is_trapped, "first unsafe frame does not trap")
+	player.register_unsafe_frame(enemy)
+	_check(player.stats.is_trapped, "second unsafe frame traps")
+	var death_result: Dictionary = {"team": PaintPalette.TEAM_NEUTRAL}
+	player.died.connect(func(_victim: GameActor, team: int, _attacker: GameActor) -> void:
+		death_result["team"] = team
 	)
-	overlapping_actor.position = GameConstants.grid_to_world(Vector2i(1, 10))
+	player.finish_by_touch(enemy)
+	_check(player.stats.is_dead, "opponent contact defeats trapped actor")
 	_check(
-		not board.can_actor_occupy(overlapping_actor.position + Vector2(0.0, 14.0), overlapping_actor),
-		"overlapping actor cannot re-enter after fully clearing the bubble cell"
+		int(death_result["team"]) == PaintPalette.TEAM_AI,
+		"defeat signal preserves opposing team attribution"
 	)
+	enemy.trap(enemy)
+	enemy.finish_by_touch(enemy)
+	_check(not enemy.stats.is_dead, "same-team/self touch cannot finish a trapped actor")
+	enemy.call("_on_trap_timeout")
 	_check(
-		not board.can_actor_occupy(outside_actor.position + Vector2(0.0, 14.0), outside_actor),
-		"actor outside at placement is blocked immediately"
+		not enemy.stats.is_dead and not enemy.stats.is_trapped,
+		"trap timeout releases the actor without counting as a defeat"
 	)
-	actor.position = GameConstants.grid_to_world(spawn) + Vector2(0.0, -21.0)
+	enemy.stats.apply_stage_item(ArenaItemType.Value.SPEED)
+	enemy.respawn(Vector2i(3, 1))
 	_check(
-		board.can_actor_occupy(actor.position + Vector2(0.0, -3.0), actor),
-		"bubble owner can keep moving while its body still overlaps the placed bubble"
+		enemy.stats.stage_speed_items == 1 and enemy.stats.move_speed == 175.0,
+		"temporary item bonuses survive death and respawn"
 	)
-	actor.position = GameConstants.grid_to_world(Vector2i(1, 10))
-	_check(
-		not board.can_actor_occupy(actor.position + Vector2(0.0, 14.0), actor),
-		"bubble owner cannot re-enter after fully leaving the placed bubble"
-	)
-	board.unregister_bubble(bubble)
 	bubble.queue_free()
-	actor.register_unsafe_frame(null)
-	_check(not actor.stats.is_trapped, "one unsafe frame does not trap")
-	actor.register_unsafe_frame(null)
-	_check(actor.stats.is_trapped, "two consecutive unsafe frames trap")
-	actor.rescue()
-	_check(not actor.stats.is_trapped, "self rescue clears trap")
-	var path: Array[Vector2i] = board.find_path(spawn, Vector2i(2, 10), actor)
-	_check(path.size() >= 2, "AStarGrid2D finds a route through open cells")
-	actor.queue_free()
-	overlapping_actor.queue_free()
-	outside_actor.queue_free()
+	player.queue_free()
+	enemy.queue_free()
 	board.queue_free()
 	await process_frame
 
-func _test_rigid_boundaries_and_depth() -> void:
-	var board := GameBoard.new()
-	root.add_child(board)
-	board.reset(MapCatalog.get_map("classic"))
-	var rigid_cell := Vector2i(5, 5)
-	for y: int in range(GameConstants.GRID_ROWS):
-		for x: int in range(GameConstants.GRID_COLUMNS):
-			board.cells[y][x] = 0
-	var settings := MatchSettings.new()
-	var actor := GameActor.new()
-	root.add_child(actor)
-	actor.setup("碰撞测试", 1, true, board, settings, Vector2i(0, 1))
-	var first_center: Vector2 = GameConstants.grid_to_world(Vector2i.ZERO)
-	var last_center: Vector2 = GameConstants.grid_to_world(
-		Vector2i(GameConstants.GRID_COLUMNS - 1, GameConstants.GRID_ROWS - 1)
-	)
-	var arena_center: Vector2 = (first_center + last_center) * 0.5
-	var boundary_cases: Array[Dictionary] = [
-		{"start": Vector2(first_center.x, arena_center.y), "outward": Vector2.LEFT, "side": "left"},
-		{"start": Vector2(last_center.x, arena_center.y), "outward": Vector2.RIGHT, "side": "right"},
-		{"start": Vector2(arena_center.x, first_center.y), "outward": Vector2.UP, "side": "top"},
-		{"start": Vector2(arena_center.x, last_center.y), "outward": Vector2.DOWN, "side": "bottom"},
-	]
-	var physics_delta: float = 1.0 / 60.0
-	var expected_distance: float = actor.stats.move_speed * physics_delta
-	for boundary_case: Dictionary in boundary_cases:
-		var boundary_start: Vector2 = boundary_case["start"] as Vector2
-		var outward: Vector2 = boundary_case["outward"] as Vector2
-		actor.position = boundary_start
-		actor.velocity = outward * actor.stats.move_speed
-		actor.call("_attempt_move", physics_delta)
-		_check(
-			actor.position.is_equal_approx(boundary_start),
-			"%s arena boundary blocks outward movement" % str(boundary_case["side"])
-		)
-		actor.position = boundary_start
-		actor.velocity = -outward * actor.stats.move_speed
-		actor.call("_attempt_move", physics_delta)
-		_check(
-			actor.position.is_equal_approx(boundary_start - outward * expected_distance),
-			"%s arena boundary still allows inward movement" % str(boundary_case["side"])
-		)
-	var free_start := GameConstants.grid_to_world(Vector2i(5, 5)) + Vector2(3.25, -4.5)
-	var directions: Array[Vector2] = [Vector2.UP, Vector2.DOWN, Vector2.LEFT, Vector2.RIGHT]
-	for direction: Vector2 in directions:
-		actor.position = free_start
-		actor.velocity = direction * actor.stats.move_speed
-		actor.call("_attempt_move", physics_delta)
-		_check(
-			actor.position.is_equal_approx(free_start + direction * expected_distance),
-			"%s movement is straight and exactly speed times delta" % str(direction)
-		)
-	board.cells[rigid_cell.y][rigid_cell.x] = 1
-	var rigid_top_left: Vector2 = GameConstants.grid_to_top_left(rigid_cell)
-	var rigid_center: Vector2 = GameConstants.grid_to_world(rigid_cell)
-	var rigid_contacts: Array[Dictionary] = [
-		{"position": Vector2(rigid_top_left.x - 20.0, rigid_center.y), "toward": Vector2.RIGHT, "side": "left"},
-		{"position": Vector2(rigid_top_left.x + GameConstants.CELL_SIZE + 20.0, rigid_center.y), "toward": Vector2.LEFT, "side": "right"},
-		{"position": Vector2(rigid_center.x, rigid_top_left.y - 20.0), "toward": Vector2.DOWN, "side": "top"},
-		{"position": Vector2(rigid_center.x, rigid_top_left.y + GameConstants.CELL_SIZE + 20.0), "toward": Vector2.UP, "side": "bottom"},
-	]
-	for rigid_contact: Dictionary in rigid_contacts:
-		var contact_position: Vector2 = rigid_contact["position"] as Vector2
-		var toward_rigid: Vector2 = rigid_contact["toward"] as Vector2
-		actor.position = contact_position
-		actor.velocity = toward_rigid * actor.stats.move_speed
-		actor.call("_attempt_move", physics_delta)
-		_check(
-			actor.position.is_equal_approx(contact_position),
-			"%s rigid center boundary blocks movement into the obstacle" % str(rigid_contact["side"])
-		)
-		actor.position = contact_position
-		actor.velocity = -toward_rigid * actor.stats.move_speed
-		actor.call("_attempt_move", physics_delta)
-		_check(
-			actor.position.is_equal_approx(contact_position - toward_rigid * expected_distance),
-			"%s rigid center boundary allows movement away from the obstacle" % str(rigid_contact["side"])
-		)
-	for y: int in range(3):
-		for x: int in range(4):
-			board.cells[y][x] = 0
-	for x: int in range(1, 4):
-		board.cells[0][x] = 1
-		board.cells[2][x] = 1
-	actor.position = GameConstants.grid_to_world(Vector2i(0, 1)) + Vector2(0.0, 6.0)
-	var corridor_y: float = actor.position.y
-	actor.velocity = Vector2.RIGHT * actor.stats.move_speed
-	for _step: int in range(20):
-		actor.call("_attempt_move", 1.0 / 60.0)
-	_check(actor.current_cell().x >= 1, "slightly misaligned actor can enter a one-cell empty corridor")
-	_check(
-		is_equal_approx(actor.position.y, corridor_y),
-		"horizontal corridor entry never changes the vertical position"
-	)
-	for y: int in range(3):
-		for x: int in range(3):
-			board.cells[y][x] = 0
-	board.cells[rigid_cell.y][rigid_cell.x] = 1
-	var rigid_bottom: float = rigid_top_left.y + GameConstants.CELL_SIZE
-	actor.position = Vector2(rigid_center.x, rigid_bottom + 22.7)
-	actor.velocity = Vector2.UP * actor.stats.move_speed
-	actor.call("_attempt_move", 1.0 / 60.0)
-	actor.call("_attempt_move", 1.0 / 60.0)
-	_check(
-		absf(actor.position.y - (rigid_bottom + 20.0)) < 0.05,
-		"blocked upward movement resolves to the exact rigid boundary"
-	)
-	board.reset(MapCatalog.get_map(MapCatalog.HARBOR_MARKET))
-	var depth_cell := Vector2i(3, 1)
-	var depth_sprite: Sprite2D = board._cell_sprites[depth_cell] as Sprite2D
-	actor.position = GameConstants.grid_to_world(Vector2i(3, 0))
-	actor.call("_process", 0.0)
-	_check(depth_sprite.z_index > actor.z_index, "rigid body covers an actor standing behind it")
-	actor.position = GameConstants.grid_to_world(Vector2i(3, 2))
-	actor.call("_process", 0.0)
-	_check(actor.z_index > depth_sprite.z_index, "actor covers a rigid body when standing in front of it")
-	actor.queue_free()
-	board.queue_free()
-	await process_frame
 
-func _cells_with_code(map_data: MapData, code: int) -> Dictionary:
-	var result: Dictionary = {}
-	for y: int in range(GameConstants.GRID_ROWS):
-		for x: int in range(GameConstants.GRID_COLUMNS):
-			if map_data.barrier_cells[y][x] == code:
-				result[Vector2i(x, y)] = true
-	return result
+func _allocation_total(allocation: Dictionary) -> int:
+	return int(allocation.get(RunProgress.SKILL_SPEED, 0)) \
+		+ int(allocation.get(RunProgress.SKILL_BUBBLE, 0)) \
+		+ int(allocation.get(RunProgress.SKILL_POWER, 0))
 
-func _building_cells(map_data: MapData) -> Dictionary:
-	var result: Dictionary = {}
-	for placement: BuildingPlacement in map_data.building_units:
-		for cell: Vector2i in placement.covered_cells():
-			result[cell] = true
-	return result
-
-func _all_play_cells_connected(map_data: MapData) -> bool:
-	var target: Dictionary = {}
-	for y: int in range(GameConstants.GRID_ROWS):
-		for x: int in range(GameConstants.GRID_COLUMNS):
-			if map_data.barrier_cells[y][x] in [0, 3]:
-				target[Vector2i(x, y)] = true
-	var reached: Dictionary = {map_data.player_spawn: true}
-	var frontier: Array[Vector2i] = [map_data.player_spawn]
-	while not frontier.is_empty():
-		var cell: Vector2i = frontier.pop_front()
-		for direction: Vector2i in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
-			var next := cell + direction
-			if target.has(next) and not reached.has(next):
-				reached[next] = true
-				frontier.append(next)
-	return reached.size() == target.size()
 
 func _check(condition: bool, description: String) -> void:
 	_checks += 1

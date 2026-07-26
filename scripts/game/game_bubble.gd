@@ -9,7 +9,8 @@ var cell: Vector2i
 var power: int = 2
 var explode_at_ms: int = 0
 var has_exploded: bool = false
-var skin: String = "aqua"
+var color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
+var owner_team: int = PaintPalette.TEAM_NEUTRAL
 
 var _fuse_timer: Timer
 var _exit_actor_ids: Dictionary = {}
@@ -17,13 +18,13 @@ var _exit_actor_ids: Dictionary = {}
 func setup(
 		new_owner: GameActor,
 		new_cell: Vector2i,
-		skin: String,
 		fuse_seconds: float = GameConstants.BUBBLE_FUSE_SECONDS,
 		initially_overlapping_actors: Array[GameActor] = []
 	) -> void:
 	bubble_owner = new_owner
 	cell = new_cell
-	self.skin = skin
+	color_id = bubble_owner.color_id
+	owner_team = bubble_owner.team_id
 	power = bubble_owner.stats.power
 	_exit_actor_ids.clear()
 	if is_instance_valid(bubble_owner):

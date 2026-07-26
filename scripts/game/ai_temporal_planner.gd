@@ -121,6 +121,63 @@ static func find_direct_escape_plan(
 	return empty_plan
 
 
+static func find_blast_escape_plan(
+		snapshot: AIBattleSnapshot,
+		forecast: AIHazardForecast,
+		start: Vector2i,
+		blast_cells: Array[Vector2i],
+		move_speed: float,
+		detonation_ms: int
+	) -> TimedPlan:
+	var empty_plan := TimedPlan.new()
+	if not _is_walkable(snapshot, start):
+		return empty_plan
+	var move_ticks: int = maxi(1, ceili(_move_duration_ms(move_speed) / float(WAIT_STEP_MS)))
+	var move_ms: int = move_ticks * WAIT_STEP_MS
+	var last_safe_arrival_ms: int = maxi(0, detonation_ms - SAFETY_MARGIN_MS)
+	var max_steps: int = last_safe_arrival_ms / move_ms
+	var blast_lookup: Dictionary = {}
+	for blast_cell: Vector2i in blast_cells:
+		blast_lookup[blast_cell] = true
+	var queue: Array[Vector2i] = [start]
+	var queue_index: int = 0
+	var steps_by_cell: Dictionary = {start: 0}
+	var parents: Dictionary = {start: Vector2i(-1, -1)}
+	while queue_index < queue.size():
+		var cell: Vector2i = queue[queue_index]
+		queue_index += 1
+		var steps: int = int(steps_by_cell[cell])
+		var arrival_ms: int = steps * move_ms
+		if steps > 0 \
+				and not blast_lookup.has(cell) \
+				and not forecast.is_unsafe(
+					cell,
+					arrival_ms,
+					maxi(arrival_ms + SAFE_TAIL_MS, forecast.latest_danger_end_ms()),
+					SAFETY_MARGIN_MS
+				):
+			return _reconstruct_direct_plan(cell, parents, steps_by_cell, move_ms)
+		if steps >= max_steps:
+			continue
+		for direction: Vector2i in CARDINAL_DIRECTIONS:
+			var neighbor: Vector2i = cell + direction
+			if steps_by_cell.has(neighbor) or not _is_walkable(snapshot, neighbor):
+				continue
+			var next_arrival_ms: int = arrival_ms + move_ms
+			if forecast.is_unsafe(
+					cell, arrival_ms, next_arrival_ms, SAFETY_MARGIN_MS
+				) or forecast.is_unsafe(
+					neighbor, arrival_ms, next_arrival_ms, SAFETY_MARGIN_MS
+				):
+				continue
+			if forecast.is_bomb_blocked(neighbor, arrival_ms, next_arrival_ms):
+				continue
+			steps_by_cell[neighbor] = steps + 1
+			parents[neighbor] = cell
+			queue.append(neighbor)
+	return empty_plan
+
+
 static func reachable_cells(
 		snapshot: AIBattleSnapshot,
 		forecast: AIHazardForecast,

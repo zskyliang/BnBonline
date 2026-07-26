@@ -44,10 +44,26 @@ func activate(logic_effect: ExplosionEffect, droplet_count: int = 4) -> void:
 	visible = true
 	set_process(true)
 	_build_cell_transforms()
+	_apply_effect_color()
 	_set_droplet_count(clampi(droplet_count, 0, 4))
 	_apply_stage_pose(0.0)
 	if is_instance_valid(effect):
 		effect.tree_exiting.connect(_on_effect_exiting, CONNECT_ONE_SHOT)
+
+
+func _apply_effect_color() -> void:
+	if not is_instance_valid(effect):
+		return
+	var color: Color = PaintPalette.get_color(effect.color_id)
+	_core.material_override = ClayMaterialLibrary.make(color.lightened(0.42), 0.84, 0.28)
+	_splash_cells.material_override = ClayMaterialLibrary.make(color, 0.86, 0.16)
+	_splash_spikes.material_override = ClayMaterialLibrary.make(color.lightened(0.18), 0.86, 0.06)
+	_foam_material.set_shader_parameter("albedo_color", color.lightened(0.48))
+	for index: int in range(_droplets.size()):
+		_droplets[index].material_override = ClayMaterialLibrary.make(
+			color.lightened(0.18 if index % 2 == 0 else 0.42),
+			0.88
+		)
 
 
 func bind_effect(logic_effect: ExplosionEffect) -> void:

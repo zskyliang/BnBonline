@@ -1,46 +1,50 @@
 class_name GameBoard
 extends Node2D
-## Owns mutable map cells, map rendering, items, bombs, and pathfinding grids.
+## Owns the open arena, paint state, bubbles, and pathfinding grid.
 
-signal cell_changed(cell: Vector2i, new_code: int)
+signal paint_changed(cell: Vector2i, owner_team: int, is_locked: bool)
+signal territory_changed(counts: Dictionary)
+signal item_spawned(item: ArenaItemState)
+signal item_collected(item: ArenaItemState, actor_id: int)
+signal items_cleared
 signal hazard_changed
 signal board_reset
 
 var map_data: MapData
 var cells: Array[PackedInt32Array] = []
+var paint_owners: Array[PackedInt32Array] = []
+var locked_cells: Array[PackedByteArray] = []
 var bombs: Dictionary = {}
-
-## Compatibility-only depth metadata used by legacy rule tests. These nodes
-## have no texture and live under the hidden 2D logic world.
-var _visual_root: Node2D
-var _cell_sprites: Dictionary = {}
-var _rng := RandomNumberGenerator.new()
-
-func _init() -> void:
-	_rng.randomize()
+var items_by_cell: Dictionary = {}
+var player_color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
+var ai_color_id: String = "blue"
+var _next_item_id: int = 1
 
 func reset(new_map_data: MapData) -> void:
 	map_data = new_map_data
 	cells = MapCatalog.clone_matrix(map_data.barrier_cells)
+	paint_owners.clear()
+	locked_cells.clear()
+	for _y: int in range(GameConstants.GRID_ROWS):
+		var owner_row := PackedInt32Array()
+		owner_row.resize(GameConstants.GRID_COLUMNS)
+		owner_row.fill(PaintPalette.TEAM_NEUTRAL)
+		paint_owners.append(owner_row)
+		var locked_row := PackedByteArray()
+		locked_row.resize(GameConstants.GRID_COLUMNS)
+		locked_row.fill(0)
+		locked_cells.append(locked_row)
 	bombs.clear()
-	_cell_sprites.clear()
-	if is_instance_valid(_visual_root):
-		_visual_root.queue_free()
-	_visual_root = Node2D.new()
-	_visual_root.name = "DepthMetadata"
-	add_child(_visual_root)
-	for y in range(GameConstants.GRID_ROWS):
-		for x in range(GameConstants.GRID_COLUMNS):
-			var code: int = cells[y][x]
-			if code <= 0 or code >= 100 or code == 9:
-				continue
-			var cell := Vector2i(x, y)
-			var depth_marker := Sprite2D.new()
-			depth_marker.z_index = 40 + int(GameConstants.grid_to_world(cell).y)
-			_visual_root.add_child(depth_marker)
-			_cell_sprites[cell] = depth_marker
+	clear_items()
+	_next_item_id = 1
 	board_reset.emit()
+	territory_changed.emit(get_territory_counts())
 	hazard_changed.emit()
+
+
+func configure_team_colors(new_player_color_id: String, new_ai_color_id: String) -> void:
+	player_color_id = new_player_color_id
+	ai_color_id = new_ai_color_id
 
 func cell_code(cell: Vector2i) -> int:
 	if not GameConstants.is_inside(cell):
@@ -169,28 +173,163 @@ func unregister_bubble(bubble: GameBubble) -> void:
 		hazard_changed.emit()
 
 func can_place_bubble(cell: Vector2i) -> bool:
-	return GameConstants.is_inside(cell) and cell_code(cell) == 0 and not bombs.has(cell)
+	return GameConstants.is_inside(cell) \
+		and cell_code(cell) == 0 \
+		and not bombs.has(cell) \
+		and not items_by_cell.has(cell)
 
-func take_item(cell: Vector2i) -> int:
-	var code: int = cell_code(cell)
-	if code < 101:
-		return 0
-	cells[cell.y][cell.x] = 0
-	cell_changed.emit(cell, 0)
-	return code
 
-func destroy_cell(cell: Vector2i) -> int:
-	var code: int = cell_code(cell)
-	if not GameRules.is_destructible(code):
+func spawn_item(item_type: int, cell: Vector2i, spawned_ms: int = 0) -> int:
+	if not ArenaItemType.is_valid(item_type) \
+		or not is_cell_walkable(cell) \
+		or bombs.has(cell) \
+		or items_by_cell.has(cell):
 		return 0
-	var item_codes: PackedInt32Array = PackedInt32Array([
-		GameConstants.ITEM_BUBBLE, GameConstants.ITEM_SPEED, GameConstants.ITEM_POWER,
-	])
-	var item_code: int = item_codes[_rng.randi_range(0, item_codes.size() - 1)]
-	cells[cell.y][cell.x] = item_code
-	cell_changed.emit(cell, item_code)
+	var item := ArenaItemState.new(_next_item_id, item_type, cell, spawned_ms)
+	_next_item_id += 1
+	items_by_cell[cell] = item
+	item_spawned.emit(item.duplicate_state())
 	hazard_changed.emit()
-	return item_code
+	return item.item_id
+
+
+func take_item(cell: Vector2i, actor_id: int) -> ArenaItemState:
+	var item: ArenaItemState = items_by_cell.get(cell) as ArenaItemState
+	if item == null:
+		return null
+	items_by_cell.erase(cell)
+	var result: ArenaItemState = item.duplicate_state()
+	item_collected.emit(result, actor_id)
+	hazard_changed.emit()
+	return result
+
+
+func item_at(cell: Vector2i) -> ArenaItemState:
+	var item: ArenaItemState = items_by_cell.get(cell) as ArenaItemState
+	return item.duplicate_state() if item != null else null
+
+
+func item_by_id(item_id: int) -> ArenaItemState:
+	for value: Variant in items_by_cell.values():
+		var item: ArenaItemState = value as ArenaItemState
+		if item != null and item.item_id == item_id:
+			return item.duplicate_state()
+	return null
+
+
+func get_item_states() -> Array[ArenaItemState]:
+	var result: Array[ArenaItemState] = []
+	for value: Variant in items_by_cell.values():
+		var item: ArenaItemState = value as ArenaItemState
+		if item != null:
+			result.append(item.duplicate_state())
+	result.sort_custom(func(left: ArenaItemState, right: ArenaItemState) -> bool:
+		return left.item_id < right.item_id
+	)
+	return result
+
+
+func clear_items() -> void:
+	if items_by_cell.is_empty():
+		return
+	items_by_cell.clear()
+	items_cleared.emit()
+	hazard_changed.emit()
+
+
+func paint_cells(
+		target_cells: Array[Vector2i],
+		owner_team: int,
+		lock_painted_cells: bool = false
+	) -> Dictionary:
+	if owner_team not in [PaintPalette.TEAM_PLAYER, PaintPalette.TEAM_AI]:
+		return {}
+	var changed: Dictionary = {}
+	for cell: Vector2i in target_cells:
+		if not GameConstants.is_inside(cell) or is_locked(cell) or changed.has(cell):
+			continue
+		var previous_owner: int = paint_owner(cell)
+		if previous_owner == owner_team and not lock_painted_cells:
+			continue
+		paint_owners[cell.y][cell.x] = owner_team
+		if lock_painted_cells:
+			locked_cells[cell.y][cell.x] = 1
+		changed[cell] = {
+			"previous_owner": previous_owner,
+			"owner_team": owner_team,
+			"locked": lock_painted_cells,
+		}
+		paint_changed.emit(cell, owner_team, lock_painted_cells)
+	if not changed.is_empty():
+		territory_changed.emit(get_territory_counts())
+	return changed
+
+
+func lock_neighborhood(center: Vector2i, owner_team: int) -> Dictionary:
+	var target_cells: Array[Vector2i] = []
+	for offset_y: int in range(-1, 2):
+		for offset_x: int in range(-1, 2):
+			var cell := center + Vector2i(offset_x, offset_y)
+			if GameConstants.is_inside(cell):
+				target_cells.append(cell)
+	return paint_cells(target_cells, owner_team, true)
+
+
+func paint_owner(cell: Vector2i) -> int:
+	if not GameConstants.is_inside(cell) or paint_owners.is_empty():
+		return PaintPalette.TEAM_NEUTRAL
+	return paint_owners[cell.y][cell.x]
+
+
+func is_locked(cell: Vector2i) -> bool:
+	return GameConstants.is_inside(cell) \
+		and not locked_cells.is_empty() \
+		and locked_cells[cell.y][cell.x] != 0
+
+
+func territory_swing(target_cells: Array[Vector2i], owner_team: int) -> int:
+	var result: int = 0
+	var visited: Dictionary = {}
+	for cell: Vector2i in target_cells:
+		if not GameConstants.is_inside(cell) or is_locked(cell) or visited.has(cell):
+			continue
+		visited[cell] = true
+		var current_owner: int = paint_owner(cell)
+		if current_owner == PaintPalette.TEAM_NEUTRAL:
+			result += 1
+		elif current_owner != owner_team:
+			result += 2
+	return result
+
+
+func get_territory_counts() -> Dictionary:
+	var player_count: int = 0
+	var ai_count: int = 0
+	var neutral_count: int = 0
+	var player_locked: int = 0
+	var ai_locked: int = 0
+	for y: int in range(GameConstants.GRID_ROWS):
+		for x: int in range(GameConstants.GRID_COLUMNS):
+			var owner: int = paint_owners[y][x] if not paint_owners.is_empty() \
+				else PaintPalette.TEAM_NEUTRAL
+			match owner:
+				PaintPalette.TEAM_PLAYER:
+					player_count += 1
+					if locked_cells[y][x] != 0:
+						player_locked += 1
+				PaintPalette.TEAM_AI:
+					ai_count += 1
+					if locked_cells[y][x] != 0:
+						ai_locked += 1
+				_:
+					neutral_count += 1
+	return {
+		"player": player_count,
+		"ai": ai_count,
+		"neutral": neutral_count,
+		"player_locked": player_locked,
+		"ai_locked": ai_locked,
+	}
 
 func get_open_cells() -> Array[Vector2i]:
 	var result: Array[Vector2i] = []
@@ -199,14 +338,6 @@ func get_open_cells() -> Array[Vector2i]:
 			var cell := Vector2i(x, y)
 			if is_cell_walkable(cell) and not bombs.has(cell):
 				result.append(cell)
-	return result
-
-func get_item_cells() -> Array[Vector2i]:
-	var result: Array[Vector2i] = []
-	for y: int in range(GameConstants.GRID_ROWS):
-		for x: int in range(GameConstants.GRID_COLUMNS):
-			if cells[y][x] >= 101:
-				result.append(Vector2i(x, y))
 	return result
 
 func get_astar(actor: GameActor = null) -> AStarGrid2D:

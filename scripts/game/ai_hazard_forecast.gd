@@ -8,17 +8,20 @@ const NO_DANGER_MS: int = 999999
 class BombBlast extends RefCounted:
 	var bomb_cell: Vector2i
 	var owner_id: int
+	var owner_team: int
 	var explode_ms: int
 	var cells: Array[Vector2i]
 
 	func _init(
 			new_bomb_cell: Vector2i,
 			new_owner_id: int,
+			new_owner_team: int,
 			new_explode_ms: int,
 			new_cells: Array[Vector2i]
 		) -> void:
 		bomb_cell = new_bomb_cell
 		owner_id = new_owner_id
+		owner_team = new_owner_team
 		explode_ms = new_explode_ms
 		cells = new_cells.duplicate()
 
@@ -41,7 +44,8 @@ static func build(
 		virtual_power: int = 0,
 		virtual_place_ms: int = 0,
 		virtual_fuse_ms: int = 0,
-		virtual_owner_id: int = 0
+		virtual_owner_id: int = 0,
+		virtual_owner_team: int = PaintPalette.TEAM_NEUTRAL
 	) -> AIHazardForecast:
 	var forecast := AIHazardForecast.new()
 	forecast.horizon_ms = maxi(0, new_horizon_ms)
@@ -60,6 +64,7 @@ static func build(
 			"actual_explode_ms": -1,
 			"serial": bomb.serial,
 			"owner_id": bomb.owner_id,
+			"owner_team": bomb.owner_team,
 			"exploded": false,
 		})
 	if GameConstants.is_inside(virtual_cell) and virtual_power > 0 and virtual_fuse_ms > 0:
@@ -71,6 +76,7 @@ static func build(
 			"actual_explode_ms": -1,
 			"serial": 1000000,
 			"owner_id": virtual_owner_id,
+			"owner_team": virtual_owner_team,
 			"exploded": false,
 		})
 	forecast._simulate_bombs(simulated_bombs)
@@ -169,6 +175,7 @@ func _simulate_bombs(simulated_bombs: Array[Dictionary]) -> void:
 			blast_events.append(BombBlast.new(
 				exploding["cell"] as Vector2i,
 				int(exploding["owner_id"]),
+				int(exploding["owner_team"]),
 				event_ms,
 				blast
 			))

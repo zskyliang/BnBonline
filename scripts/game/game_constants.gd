@@ -11,17 +11,16 @@ const GAME_VIEW_SIZE: Vector2 = Vector2(800.0, 600.0)
 const INITIAL_SPEED: float = 150.0
 const INITIAL_BUBBLES: int = 2
 const INITIAL_POWER: int = 2
+const SPEED_PER_SKILL_POINT: float = 10.0
+const SPEED_PER_STAGE_ITEM: float = 25.0
+const ITEM_SPAWN_INTERVAL_SECONDS: float = 10.0
 const BUBBLE_FUSE_SECONDS: float = 3.0
 const EXPLOSION_SECONDS: float = 0.45
 const TRAP_SECONDS: float = 3.0
 const RESPAWN_SECONDS: float = 2.4
 const RESPAWN_INVINCIBLE_SECONDS: float = 1.0
-const ROUND_SECONDS: float = 300.0
+const ROUND_SECONDS: float = 180.0
 const AI_THINK_SECONDS: float = 0.15
-
-const ITEM_BUBBLE: int = 101
-const ITEM_SPEED: int = 102
-const ITEM_POWER: int = 103
 
 static func grid_to_world(cell: Vector2i) -> Vector2:
 	return GRID_ORIGIN + Vector2(cell) * CELL_SIZE + Vector2.ONE * CELL_SIZE * 0.5

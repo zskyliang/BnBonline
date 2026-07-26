@@ -3,12 +3,11 @@ extends CharacterBody2D
 ## Player or AI-controlled arena actor.
 
 signal bomb_requested(actor: GameActor)
-signal died(victim: GameActor, attacker: GameActor)
+signal died(victim: GameActor, defeating_team: int, attacker: GameActor)
 signal trapped(actor: GameActor, attacker: GameActor)
-signal rescued(actor: GameActor)
-signal item_collected(actor: GameActor, item_code: int)
 
 const COLLISION_SWEEP_ITERATIONS: int = 10
+const DEFEAT_VISIBLE_SECONDS: float = 0.18
 
 enum Facing { UP, DOWN, LEFT, RIGHT }
 
@@ -19,8 +18,11 @@ var stats := ActorStats.new()
 var board: GameBoard
 var settings: MatchSettings
 var last_attacker: GameActor
+var last_attacker_team: int = PaintPalette.TEAM_NEUTRAL
 var unsafe_frame_count: int = 0
 var character_id: String = "builder"
+var color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
+var was_finished_by_enemy_touch: bool = false
 
 var _desired_direction: Vector2 = Vector2.ZERO
 var _facing: Facing = Facing.DOWN
@@ -33,14 +35,23 @@ func setup(
 		player_controlled: bool,
 		new_board: GameBoard,
 		new_settings: MatchSettings,
-		spawn_cell: Vector2i
+		spawn_cell: Vector2i,
+		new_color_id: String = ""
 	) -> void:
 	actor_name = new_name
 	team_id = new_team_id
 	is_player = player_controlled
 	board = new_board
 	settings = new_settings
+	color_id = new_color_id
+	if not PaintPalette.is_valid_color_id(color_id):
+		color_id = (
+			PaintPalette.DEFAULT_PLAYER_COLOR_ID
+			if team_id == PaintPalette.TEAM_PLAYER
+			else "blue"
+		)
 	stats.reset_for_match()
+	was_finished_by_enemy_touch = false
 	position = GameConstants.grid_to_world(spawn_cell)
 	collision_layer = 0
 	collision_mask = 0
@@ -59,7 +70,6 @@ func _physics_process(delta: float) -> void:
 	_desired_direction = _cardinalize(_desired_direction)
 	velocity = _desired_direction * stats.move_speed
 	_attempt_move(delta)
-	_try_pickup()
 
 func _process(delta: float) -> void:
 	if stats.is_dead and not visible:
@@ -67,7 +77,7 @@ func _process(delta: float) -> void:
 	z_index = 40 + int(position.y)
 	if stats.is_dead:
 		_death_time += delta
-		if _death_time >= 2.2:
+		if _death_time >= DEFEAT_VISIBLE_SECONDS:
 			visible = false
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -75,9 +85,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("place_bomb"):
 		bomb_requested.emit(self)
-		get_viewport().set_input_as_handled()
-	elif event.is_action_pressed("self_rescue") and stats.is_trapped:
-		rescue()
 		get_viewport().set_input_as_handled()
 
 func set_ai_direction(direction: Vector2) -> void:
@@ -94,19 +101,6 @@ func current_cell() -> Vector2i:
 func foot_cells() -> Array[Vector2i]:
 	return GameRules.foot_cells(position)
 
-func apply_item(item_code: int) -> void:
-	match item_code:
-		GameConstants.ITEM_BUBBLE:
-			stats.bubble_capacity = mini(settings.max_bubbles, stats.bubble_capacity + 1)
-		GameConstants.ITEM_SPEED:
-			stats.move_speed = minf(float(settings.max_speed), stats.move_speed + 25.0)
-		GameConstants.ITEM_POWER:
-			stats.power = mini(settings.max_power, stats.power + 1)
-	item_collected.emit(self, item_code)
-
-func clamp_stats() -> void:
-	stats.clamp_to(settings)
-
 func register_unsafe_frame(attacker: GameActor) -> void:
 	if stats.is_dead or stats.is_trapped or stats.is_invincible():
 		unsafe_frame_count = 0
@@ -114,6 +108,7 @@ func register_unsafe_frame(attacker: GameActor) -> void:
 	unsafe_frame_count += 1
 	if is_instance_valid(attacker):
 		last_attacker = attacker
+		last_attacker_team = attacker.team_id
 	if unsafe_frame_count >= 2:
 		trap(last_attacker)
 
@@ -124,7 +119,13 @@ func trap(attacker: GameActor) -> void:
 	if stats.is_dead or stats.is_trapped or stats.is_invincible():
 		return
 	last_attacker = attacker
+	last_attacker_team = (
+		attacker.team_id
+		if is_instance_valid(attacker)
+		else PaintPalette.TEAM_NEUTRAL
+	)
 	stats.is_trapped = true
+	was_finished_by_enemy_touch = false
 	velocity = Vector2.ZERO
 	_desired_direction = Vector2.ZERO
 	unsafe_frame_count = 0
@@ -136,16 +137,14 @@ func trap(attacker: GameActor) -> void:
 	_trap_timer.start()
 	trapped.emit(self, attacker)
 
-func rescue() -> void:
-	if stats.is_dead or not stats.is_trapped:
-		return
-	stats.is_trapped = false
-	_clear_trap_visual()
-	rescued.emit(self)
-
 func finish_by_touch(attacker: GameActor) -> void:
-	if stats.is_trapped and not stats.is_dead:
+	if stats.is_trapped \
+			and not stats.is_dead \
+			and is_instance_valid(attacker) \
+			and attacker.team_id != team_id:
 		last_attacker = attacker
+		last_attacker_team = attacker.team_id
+		was_finished_by_enemy_touch = true
 		die(attacker)
 
 func die(attacker: GameActor) -> void:
@@ -154,16 +153,21 @@ func die(attacker: GameActor) -> void:
 	stats.is_dead = true
 	stats.is_trapped = false
 	last_attacker = attacker
+	var defeating_team: int = last_attacker_team
+	if is_instance_valid(attacker):
+		defeating_team = attacker.team_id
 	_clear_trap_visual()
 	_death_time = 0.0
-	died.emit(self, attacker)
+	died.emit(self, defeating_team, attacker)
 
 func respawn(spawn_cell: Vector2i) -> void:
 	stats.is_dead = false
 	stats.is_trapped = false
 	stats.active_bubbles = 0
 	stats.invincible_until_ms = Time.get_ticks_msec() + int(GameConstants.RESPAWN_INVINCIBLE_SECONDS * 1000.0)
+	was_finished_by_enemy_touch = false
 	last_attacker = null
+	last_attacker_team = PaintPalette.TEAM_NEUTRAL
 	unsafe_frame_count = 0
 	position = GameConstants.grid_to_world(spawn_cell)
 	reset_physics_interpolation()
@@ -197,11 +201,6 @@ func _move_on_axis(motion: Vector2) -> void:
 	if safe_fraction > 0.0:
 		position += motion * safe_fraction
 
-func _try_pickup() -> void:
-	var item_code: int = board.take_item(current_cell())
-	if item_code > 0:
-		apply_item(item_code)
-
 func _build_visuals() -> void:
 	var shape := CollisionShape2D.new()
 	var rectangle := RectangleShape2D.new()
@@ -220,7 +219,13 @@ func _clear_trap_visual() -> void:
 	_trap_timer = null
 
 func _on_trap_timeout() -> void:
-	die(last_attacker)
+	if stats.is_dead or not stats.is_trapped:
+		return
+	stats.is_trapped = false
+	last_attacker = null
+	last_attacker_team = PaintPalette.TEAM_NEUTRAL
+	unsafe_frame_count = 0
+	_clear_trap_visual()
 
 func _update_facing(direction: Vector2) -> void:
 	if absf(direction.x) > absf(direction.y):

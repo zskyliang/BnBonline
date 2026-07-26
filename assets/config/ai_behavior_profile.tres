@@ -1,0 +1,31 @@
+[gd_resource type="Resource" script_class="AIBehaviorProfile" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/resources/ai_behavior_profile.gd" id="1_profile"]
+
+[resource]
+script = ExtResource("1_profile")
+paint_swing_weight = 34.0
+pending_overlap_penalty = 9.0
+paint_travel_divisor = 75.0
+bubble_slot_fill_weight = 48.3
+active_barrage_current_cell_bonus = 110.4
+active_barrage_overlap_scale = 0.3
+item_base_value = 30.0
+speed_item_value = 78.0
+bubble_item_value = 72.0
+power_item_value = 86.0
+item_travel_divisor = 24.0
+item_competition_penalty = 38.0
+item_late_round_penalty = 52.0
+power_swing_weight = 9.0
+bubble_capacity_pressure_weight = 18.0
+speed_payback_weight = 0.28
+speed_eta_divisor_ms = 50.0
+minimum_item_priority_score = 1.0
+maximum_item_travel_ms = 6000
+item_competition_window_ms = 400
+item_payback_buffer_ms = 2500
+minimum_item_use_window_ms = 500
+item_claim_steal_advantage_ms = 750
+item_claim_grace_ms = 750
+maximum_item_claim_ms = 5000

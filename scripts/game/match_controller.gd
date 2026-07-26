@@ -2,13 +2,19 @@ class_name MatchController
 extends Node
 ## Root match orchestrator for spawning, scoring, explosions, settings, and round flow.
 
+const DEFAULT_AI_PROFILE: AIBehaviorProfile = preload(
+	"res://assets/config/ai_behavior_profile.tres"
+)
+
 signal match_finished(results: Array[Dictionary])
 signal scores_changed(entries: Array[Dictionary])
 signal time_changed(seconds: int)
+signal stage_changed(stage_number: int)
 
 enum AppState { LOBBY, SETUP, MATCH, RESULT }
 
 var settings: MatchSettings
+var run_progress: RunProgress
 var board: GameBoard
 var hud: GameHud
 var _arena_timer_label: Label
@@ -23,15 +29,17 @@ var _actors: Array[GameActor] = []
 var _ai_controllers: Array[RuleAI] = []
 var _active_explosions: Array[ExplosionEffect] = []
 var _active_unsafe_cells: Dictionary = {}
-var _active_explosion_attackers: Dictionary = {}
-var _scores: Dictionary = {}
+var _active_explosion_sources: Dictionary = {}
+var _respawn_timers: Dictionary = {}
 var _player: GameActor
 var _remaining_seconds: float = GameConstants.ROUND_SECONDS
 var _round_over: bool = false
 var _is_paused: bool = false
 var _simulation_time_ms: float = 0.0
 var _rng := RandomNumberGenerator.new()
-var _ai_item_claims: Dictionary = {}
+var _item_rng := RandomNumberGenerator.new()
+var _next_item_spawn_ms: int = 10000
+var _item_claims: Dictionary = {}
 var _ai_schedule_elapsed_seconds: float = 0.0
 var _next_ai_index: int = 0
 var _displayed_seconds: int = -1
@@ -42,6 +50,8 @@ var _cached_ai_forecast_built_ms: int = 0
 var _ai_hazard_revision: int = 0
 var _cached_ai_hazard_revision: int = -1
 var _current_ai_character_ids: Array[String] = []
+var _last_round_won: bool = false
+var ai_profile: AIBehaviorProfile = DEFAULT_AI_PROFILE.duplicate(true) as AIBehaviorProfile
 
 const AI_FORECAST_CACHE_MS: int = 60
 
@@ -50,12 +60,14 @@ func _ready() -> void:
 	_rng.randomize()
 	_ensure_input_actions()
 	settings = MatchSettings.load_from_disk()
+	run_progress = RunProgress.new()
 	_build_scene_tree()
 	var web_adapter := WebPlatformAdapter.new()
 	web_adapter.name = "WebPlatformAdapter"
 	add_child(web_adapter)
 	_connect_hud()
 	if DisplayServer.get_name() == "headless":
+		_begin_new_run()
 		start_match()
 	else:
 		_enter_lobby()
@@ -64,11 +76,13 @@ func _physics_process(delta: float) -> void:
 	if _round_over or _is_paused:
 		return
 	_simulation_time_ms += delta * 1000.0
+	_spawn_due_items()
 	_process_ai_schedule(delta)
 	_remaining_seconds = maxf(0.0, _remaining_seconds - delta)
 	_update_time_display()
 	_resolve_explosion_hits()
 	_resolve_actor_contacts()
+	_resolve_item_pickups()
 	if _remaining_seconds <= 0.0:
 		_end_round()
 
@@ -85,6 +99,10 @@ func _process(_delta: float) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause_game") and not _round_over:
+		if is_instance_valid(hud) and hud.is_settings_visible():
+			_close_settings()
+			get_viewport().set_input_as_handled()
+			return
 		if _is_paused:
 			_resume_match()
 		else:
@@ -100,7 +118,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		_arena_view.zoom_out()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("zoom_reset"):
-		_arena_view.reset_zoom()
+		_arena_view.reset_camera()
 		get_viewport().set_input_as_handled()
 
 func start_match(
@@ -110,32 +128,38 @@ func start_match(
 	if new_settings != null:
 		settings = new_settings
 	settings.normalize()
+	if run_progress == null or run_progress.ai_character_ids.is_empty():
+		_begin_new_run()
 	if not ai_character_ids.is_empty():
-		_current_ai_character_ids = ai_character_ids.duplicate()
-	if _current_ai_character_ids.size() != settings.ai_count:
-		_current_ai_character_ids = CharacterCatalog.assign_ai_characters(
-			settings.character_id,
-			settings.ai_count,
-			_rng
-		)
+		run_progress.ai_character_ids = ai_character_ids.duplicate()
+	_current_ai_character_ids = run_progress.ai_character_ids.duplicate()
 	get_tree().paused = false
 	_is_paused = false
 	_round_over = false
 	app_state = AppState.MATCH
 	_remaining_seconds = GameConstants.ROUND_SECONDS
+	_last_round_won = false
 	_simulation_time_ms = 0.0
+	_item_rng.seed = _rng.randi()
+	_next_item_spawn_ms = int(GameConstants.ITEM_SPAWN_INTERVAL_SECONDS * 1000.0)
+	_item_claims.clear()
 	_displayed_seconds = -1
 	_clear_match_nodes()
-	board.reset(MapCatalog.get_map(settings.map_id))
+	board.configure_team_colors(run_progress.player_color_id, run_progress.ai_color_id)
+	board.reset(MapCatalog.get_map())
+	_arena_view.apply_camera_settings(settings)
 	_arena_view.fit_camera(board.map_data)
 	_spawn_fighters()
 	_arena_view.visible = true
 	hud.sync_settings(settings)
+	hud.update_campaign(run_progress)
+	hud.update_item_bonuses(_player)
 	hud.show_match()
 	hud.hide_pause()
 	hud.hide_result()
 	_update_time_display()
 	_update_scoreboard()
+	stage_changed.emit(run_progress.stage_number)
 	_audio_call(&"play_sfx", [&"start"])
 	_audio_call(&"play_music")
 
@@ -145,7 +169,9 @@ func _enter_lobby() -> void:
 	_round_over = true
 	_is_paused = false
 	app_state = AppState.LOBBY
+	_clear_match_nodes()
 	_current_ai_character_ids.clear()
+	run_progress = RunProgress.new()
 	_arena_view.visible = false
 	hud.show_lobby()
 	_audio_call(&"stop_music")
@@ -163,12 +189,14 @@ func _enter_setup() -> void:
 func _on_match_requested(configuration: Dictionary) -> void:
 	settings.apply_dictionary(configuration)
 	settings.save_to_disk()
-	_current_ai_character_ids = CharacterCatalog.assign_ai_characters(
-		settings.character_id,
-		settings.ai_count,
-		_rng
-	)
-	start_match(settings, _current_ai_character_ids)
+	_begin_new_run()
+	start_match(settings)
+
+
+func _begin_new_run() -> void:
+	run_progress = RunProgress.new()
+	run_progress.begin(settings.character_id, settings.player_color_id, _rng)
+	_current_ai_character_ids = run_progress.ai_character_ids.duplicate()
 
 
 func _quit_game() -> void:
@@ -189,13 +217,26 @@ func build_ai_snapshot() -> AIBattleSnapshot:
 		if is_instance_valid(bubble.bubble_owner):
 			owner_id = bubble.bubble_owner.get_instance_id()
 		snapshot.bombs.append(AIBattleSnapshot.BombState.new(
-			bubble.cell, bubble.power, bubble.milliseconds_until_explosion(), owner_id, serial
+			bubble.cell,
+			bubble.power,
+			bubble.milliseconds_until_explosion(),
+			owner_id,
+			serial,
+			bubble.owner_team
 		))
 		serial += 1
 	for effect: ExplosionEffect in _active_explosions:
 		if is_instance_valid(effect):
+			var attacker_id: int = (
+				effect.attacker.get_instance_id()
+				if is_instance_valid(effect.attacker)
+				else 0
+			)
 			snapshot.explosions.append(AIBattleSnapshot.ExplosionState.new(
-				effect.cells, effect.milliseconds_remaining()
+				effect.cells,
+				effect.milliseconds_remaining(),
+				attacker_id,
+				effect.attacker_team
 			))
 	for battle_actor: GameActor in _actors:
 		if not is_instance_valid(battle_actor):
@@ -211,9 +252,22 @@ func build_ai_snapshot() -> AIBattleSnapshot:
 			battle_actor.stats.power,
 			battle_actor.stats.is_dead,
 			battle_actor.stats.is_trapped,
-			battle_actor.is_player
+			battle_actor.is_player,
+			battle_actor.stats.stage_speed_items,
+			battle_actor.stats.stage_bubble_items,
+			battle_actor.stats.stage_power_items
 		))
-	snapshot.item_cells = board.get_item_cells()
+	for item: ArenaItemState in board.get_item_states():
+		snapshot.items.append(AIBattleSnapshot.ItemState.new(
+			item.item_id,
+			item.item_type,
+			item.cell,
+			item.spawned_ms
+		))
+	snapshot.remaining_round_ms = maxi(0, int(_remaining_seconds * 1000.0))
+	snapshot.paint_owners = MapCatalog.clone_matrix(board.paint_owners)
+	for row: PackedByteArray in board.locked_cells:
+		snapshot.locked_cells.append(row.duplicate())
 	return snapshot
 
 func build_ai_forecast(horizon_ms: int = 5000) -> AIHazardForecast:
@@ -240,23 +294,9 @@ func get_shared_ai_forecast(
 func get_simulation_time_ms() -> int:
 	return int(_simulation_time_ms)
 
-func claim_ai_item(actor_id: int, cell: Vector2i, ttl_ms: int = 600) -> void:
-	_prune_ai_item_claims()
-	_ai_item_claims[cell] = {
-		"actor_id": actor_id,
-		"expires_ms": get_simulation_time_ms() + ttl_ms,
-	}
 
-func is_ai_item_claimed_by_other(actor_id: int, cell: Vector2i) -> bool:
-	_prune_ai_item_claims()
-	if not _ai_item_claims.has(cell):
-		return false
-	return int((_ai_item_claims[cell] as Dictionary).get("actor_id", 0)) != actor_id
-
-func release_ai_item_claims(actor_id: int) -> void:
-	for cell: Vector2i in _ai_item_claims.keys():
-		if int((_ai_item_claims[cell] as Dictionary).get("actor_id", 0)) == actor_id:
-			_ai_item_claims.erase(cell)
+func get_remaining_round_ms() -> int:
+	return maxi(0, int(_remaining_seconds * 1000.0))
 
 func get_player() -> GameActor:
 	return _player
@@ -285,13 +325,14 @@ func request_bomb(actor: GameActor) -> bool:
 	bubble.setup(
 		actor,
 		cell,
-		settings.bubble_skin,
 		GameConstants.BUBBLE_FUSE_SECONDS,
 		initially_overlapping_actors
 	)
 	bubble.exploded.connect(_on_bubble_exploded)
 	board.register_bubble(bubble)
-	_arena_view.add_bubble(bubble)
+	# Building the decorative 3D mesh is not part of the authoritative placement
+	# transaction. Defer it so AI planning frames stay bounded under four actors.
+	_arena_view.call_deferred("add_bubble", bubble)
 	actor.stats.active_bubbles += 1
 	_audio_call(&"play_sfx", [&"lay"])
 	return true
@@ -308,6 +349,8 @@ func _build_scene_tree() -> void:
 	board.name = "Board"
 	_world.add_child(board)
 	board.hazard_changed.connect(_invalidate_ai_forecast)
+	board.territory_changed.connect(_on_territory_changed)
+	board.item_collected.connect(_on_board_item_collected)
 	_entity_root = Node2D.new()
 	_entity_root.name = "Entities"
 	_world.add_child(_entity_root)
@@ -335,24 +378,42 @@ func _connect_hud() -> void:
 	hud.match_requested.connect(_on_match_requested)
 	hud.resume_requested.connect(_resume_match)
 	hud.restart_requested.connect(start_match)
+	hud.retry_requested.connect(start_match)
+	hud.skill_confirmed.connect(_advance_stage)
 	hud.lobby_requested.connect(_enter_lobby)
 	hud.quit_requested.connect(_quit_game)
 	hud.zoom_in_requested.connect(_arena_view.zoom_in)
 	hud.zoom_out_requested.connect(_arena_view.zoom_out)
 	hud.zoom_reset_requested.connect(_arena_view.reset_zoom)
+	hud.camera_reset_requested.connect(_arena_view.reset_camera)
+	hud.camera_pose_requested.connect(_arena_view.set_camera_pose)
+	hud.camera_adjustment_finished.connect(_arena_view.finish_camera_adjustment)
+	hud.settings_open_requested.connect(_open_settings)
+	hud.settings_close_requested.connect(_close_settings)
 	_arena_view.zoom_changed.connect(hud.update_zoom)
+	_arena_view.camera_pose_changed.connect(hud.update_camera_pose)
+	_arena_view.camera_adjustment_finished.connect(_on_camera_adjustment_finished)
 	hud.update_zoom(_arena_view.get_zoom_percent())
+	hud.update_camera_pose(
+		_arena_view.get_azimuth(),
+		_arena_view.get_elevation(),
+		_arena_view.get_zoom()
+	)
 
 func _clear_match_nodes() -> void:
+	for timer_value: Variant in _respawn_timers.values():
+		var timer: Timer = timer_value as Timer
+		if is_instance_valid(timer):
+			timer.queue_free()
+	_respawn_timers.clear()
 	_active_explosions.clear()
 	_active_unsafe_cells.clear()
-	_active_explosion_attackers.clear()
+	_active_explosion_sources.clear()
 	_actors.clear()
 	_ai_controllers.clear()
+	_item_claims.clear()
 	_ai_schedule_elapsed_seconds = 0.0
 	_next_ai_index = 0
-	_scores.clear()
-	_ai_item_claims.clear()
 	_player = null
 	_arena_view.clear_entities()
 	for child: Node in _entity_root.get_children():
@@ -365,23 +426,27 @@ func _spawn_fighters() -> void:
 	var player_character := CharacterCatalog.get_definition(settings.character_id)
 	_player = _spawn_actor(
 		"玩家",
-		1,
+		PaintPalette.TEAM_PLAYER,
 		true,
 		board.map_data.player_spawn,
-		player_character.id
+		player_character.id,
+		run_progress.player_color_id
 	)
+	run_progress.apply_allocation(_player.stats, run_progress.player_allocation())
 	used_cells.append(board.map_data.player_spawn)
-	for index: int in range(settings.ai_count):
+	for index: int in range(run_progress.ai_count()):
 		var spawn: Vector2i = _find_ai_spawn(used_cells)
 		used_cells.append(spawn)
-		var ai_character_id := _current_ai_character_ids[index]
+		var ai_character_id: String = run_progress.ai_character_ids[index]
 		var ai_actor: GameActor = _spawn_actor(
 			"AI %d" % (index + 1),
-			2,
+			PaintPalette.TEAM_AI,
 			false,
 			spawn,
-			ai_character_id
+			ai_character_id,
+			run_progress.ai_color_id
 		)
+		run_progress.apply_allocation(ai_actor.stats, run_progress.ai_allocation(index))
 		var controller := RuleAI.new()
 		controller.name = "RuleAI%d" % (index + 1)
 		ai_actor.add_child(controller)
@@ -421,24 +486,27 @@ func _spawn_actor(
 		team_id: int,
 		is_player_actor: bool,
 		spawn_cell: Vector2i,
-		character_id: String = "builder"
+		character_id: String = "builder",
+		color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
 	) -> GameActor:
 	var actor := GameActor.new()
 	actor.name = display_name
 	_entity_root.add_child(actor)
-	actor.setup(display_name, team_id, is_player_actor, board, settings, spawn_cell)
+	actor.setup(
+		display_name,
+		team_id,
+		is_player_actor,
+		board,
+		settings,
+		spawn_cell,
+		color_id
+	)
 	actor.character_id = character_id
 	actor.bomb_requested.connect(_on_bomb_requested)
 	actor.died.connect(_on_actor_died)
-	actor.rescued.connect(_on_actor_rescued)
-	actor.item_collected.connect(_on_item_collected)
+	actor.trapped.connect(_on_actor_trapped)
 	_actors.append(actor)
-	_scores[actor.get_instance_id()] = {
-		"name": display_name,
-		"kills": 0,
-		"character_id": character_id,
-	}
-	_arena_view.add_actor(actor, character_id)
+	_arena_view.add_actor(actor, character_id, color_id)
 	return actor
 
 func _find_ai_spawn(used_cells: Array[Vector2i]) -> Vector2i:
@@ -465,16 +533,13 @@ func _on_bubble_exploded(bubble: GameBubble) -> void:
 	if is_instance_valid(bubble.bubble_owner):
 		bubble.bubble_owner.stats.active_bubbles = maxi(0, bubble.bubble_owner.stats.active_bubbles - 1)
 	var blast: Array[Vector2i] = GameRules.blast_cells(bubble.cell, bubble.power, board.cells)
+	board.paint_cells(blast, bubble.owner_team)
 	var chained: Array[GameBubble] = []
 	for cell: Vector2i in blast:
 		if board.bombs.has(cell):
 			var other: GameBubble = board.bombs[cell] as GameBubble
 			if other != bubble and is_instance_valid(other) and other not in chained:
 				chained.append(other)
-		if GameRules.is_destructible(board.cell_code(cell)):
-			board.destroy_cell(cell)
-		elif board.cell_code(cell) >= 101:
-			board.take_item(cell)
 	var effect := ExplosionEffect.new()
 	_effect_root.add_child(effect)
 	effect.setup(blast, bubble.cell, bubble.bubble_owner)
@@ -503,24 +568,42 @@ func _resolve_explosion_hits() -> void:
 		if not is_instance_valid(actor) or actor.stats.is_dead:
 			continue
 		var feet: Array[Vector2i] = actor.foot_cells()
-		if GameRules.both_feet_unsafe(actor.position, _active_unsafe_cells):
-			var attacker: GameActor = _active_explosion_attackers.get(
-				feet[0], _active_explosion_attackers.get(feet[1], null)
-			) as GameActor
+		var left_attacker: GameActor = _harmful_attacker_for_cell(actor, feet[0])
+		var right_attacker: GameActor = _harmful_attacker_for_cell(actor, feet[1])
+		if is_instance_valid(left_attacker) and is_instance_valid(right_attacker):
+			var attacker: GameActor = left_attacker
+			if attacker.team_id == actor.team_id and right_attacker.team_id != actor.team_id:
+				attacker = right_attacker
 			actor.register_unsafe_frame(attacker)
 		else:
 			actor.register_safe_frame()
 
 func _rebuild_active_explosion_lookup() -> void:
 	_active_unsafe_cells.clear()
-	_active_explosion_attackers.clear()
+	_active_explosion_sources.clear()
 	for effect: ExplosionEffect in _active_explosions:
 		if not is_instance_valid(effect):
 			continue
 		for cell: Vector2i in effect.cells:
 			_active_unsafe_cells[cell] = true
-			if is_instance_valid(effect.attacker):
-				_active_explosion_attackers[cell] = effect.attacker
+			var sources: Array = _active_explosion_sources.get(cell, []) as Array
+			sources.append(effect)
+			_active_explosion_sources[cell] = sources
+
+
+func _harmful_attacker_for_cell(victim: GameActor, cell: Vector2i) -> GameActor:
+	var sources: Array = _active_explosion_sources.get(cell, []) as Array
+	var self_attacker: GameActor
+	for value: Variant in sources:
+		var effect: ExplosionEffect = value as ExplosionEffect
+		if not is_instance_valid(effect) or not is_instance_valid(effect.attacker):
+			continue
+		if effect.attacker == victim:
+			self_attacker = effect.attacker
+			continue
+		if effect.attacker_team != victim.team_id:
+			return effect.attacker
+	return self_attacker
 
 func _resolve_actor_contacts() -> void:
 	for left_index: int in range(_actors.size()):
@@ -536,28 +619,59 @@ func _resolve_actor_contacts() -> void:
 			_resolve_touch_pair(left, right)
 
 func _resolve_touch_pair(left: GameActor, right: GameActor) -> void:
+	if left.team_id == right.team_id:
+		return
 	if left.stats.is_trapped and not right.stats.is_trapped:
-		if left.team_id == right.team_id:
-			left.rescue()
-		else:
-			left.finish_by_touch(right)
+		left.finish_by_touch(right)
 	elif right.stats.is_trapped and not left.stats.is_trapped:
-		if left.team_id == right.team_id:
-			right.rescue()
-		else:
-			right.finish_by_touch(left)
+		right.finish_by_touch(left)
 
-func _on_actor_died(victim: GameActor, attacker: GameActor) -> void:
+func _on_actor_died(victim: GameActor, defeating_team: int, attacker: GameActor) -> void:
 	_audio_call(&"play_sfx", [&"die"])
-	if is_instance_valid(attacker) and attacker != victim and _scores.has(attacker.get_instance_id()):
-		var score: Dictionary = _scores[attacker.get_instance_id()]
-		score["kills"] = int(score.get("kills", 0)) + 1
-		_scores[attacker.get_instance_id()] = score
+	release_item_claims_for_actor(victim.get_instance_id())
+	var has_opposing_defeater: bool = defeating_team in [
+		PaintPalette.TEAM_PLAYER,
+		PaintPalette.TEAM_AI,
+	] and defeating_team != victim.team_id \
+		and victim.was_finished_by_enemy_touch
+	if has_opposing_defeater:
+		var locked: Dictionary = board.lock_neighborhood(victim.current_cell(), defeating_team)
+		_arena_view.play_defeat_burst(
+			victim.current_cell(),
+			_team_color_id(defeating_team),
+			locked.keys()
+		)
+	else:
+		_arena_view.play_defeat_burst(victim.current_cell(), victim.color_id, [])
 	_update_scoreboard()
 	_respawn_later(victim)
 
+
+func _on_actor_trapped(victim: GameActor, _attacker: GameActor) -> void:
+	release_item_claims_for_actor(victim.get_instance_id())
+
 func _respawn_later(actor: GameActor) -> void:
-	await get_tree().create_timer(GameConstants.RESPAWN_SECONDS, false).timeout
+	if not is_instance_valid(actor):
+		return
+	var actor_id: int = actor.get_instance_id()
+	if _respawn_timers.has(actor_id):
+		var previous: Timer = _respawn_timers[actor_id] as Timer
+		if is_instance_valid(previous):
+			previous.queue_free()
+	var timer := Timer.new()
+	timer.name = "RespawnTimer%d" % actor_id
+	timer.one_shot = true
+	timer.wait_time = GameConstants.RESPAWN_SECONDS
+	timer.timeout.connect(_on_respawn_timeout.bind(actor, timer), CONNECT_ONE_SHOT)
+	add_child(timer)
+	_respawn_timers[actor_id] = timer
+	timer.start()
+
+func _on_respawn_timeout(actor: GameActor, timer: Timer) -> void:
+	if is_instance_valid(actor):
+		_respawn_timers.erase(actor.get_instance_id())
+	if is_instance_valid(timer):
+		timer.queue_free()
 	if _round_over or not is_instance_valid(actor):
 		return
 	actor.respawn(_find_respawn_cell(actor))
@@ -578,21 +692,41 @@ func _find_respawn_cell(actor: GameActor) -> Vector2i:
 			return cell
 	return board.map_data.player_spawn
 
-func _on_actor_rescued(_actor: GameActor) -> void:
-	_audio_call(&"play_sfx", [&"save"])
-
-func _on_item_collected(_actor: GameActor, _item_code: int) -> void:
-	_audio_call(&"play_sfx", [&"get"])
-
 func _update_scoreboard() -> void:
-	var entries: Array[Dictionary] = []
-	for value: Variant in _scores.values():
-		entries.append((value as Dictionary).duplicate())
+	if board == null or board.paint_owners.is_empty() or run_progress == null:
+		return
+	var counts: Dictionary = board.get_territory_counts()
+	var entries: Array[Dictionary] = [
+		{
+			"name": "玩家",
+			"team_id": PaintPalette.TEAM_PLAYER,
+			"color_id": run_progress.player_color_id,
+			"cells": int(counts.get("player", 0)),
+			"locked": int(counts.get("player_locked", 0)),
+			"character_id": settings.character_id,
+		},
+		{
+			"name": "AI 队",
+			"team_id": PaintPalette.TEAM_AI,
+			"color_id": run_progress.ai_color_id,
+			"cells": int(counts.get("ai", 0)),
+			"locked": int(counts.get("ai_locked", 0)),
+			"character_id": (
+				run_progress.ai_character_ids[0]
+				if not run_progress.ai_character_ids.is_empty()
+				else "builder"
+			),
+		},
+	]
 	entries.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return int(a.get("kills", 0)) > int(b.get("kills", 0))
+		return int(a.get("cells", 0)) > int(b.get("cells", 0))
 	)
 	hud.update_scores(entries)
 	scores_changed.emit(entries)
+
+
+func _on_territory_changed(_counts: Dictionary) -> void:
+	_update_scoreboard()
 
 func _end_round() -> void:
 	if _round_over:
@@ -601,30 +735,68 @@ func _end_round() -> void:
 	_is_paused = true
 	app_state = AppState.RESULT
 	_audio_call(&"stop_music")
-	var best_score: int = -1
-	var winners: Array[String] = []
-	for value: Variant in _scores.values():
-		var entry: Dictionary = value as Dictionary
-		var kills: int = int(entry.get("kills", 0))
-		if kills > best_score:
-			best_score = kills
-			winners = [str(entry.get("name", "?"))]
-		elif kills == best_score:
-			winners.append(str(entry.get("name", "?")))
-	if winners.size() == 1:
-		hud.show_result("%s 获胜！" % winners[0], "最高击败：%d" % best_score)
+	var counts: Dictionary = board.get_territory_counts()
+	var player_cells: int = int(counts.get("player", 0))
+	var ai_cells: int = int(counts.get("ai", 0))
+	_last_round_won = player_cells > ai_cells
+	for actor: GameActor in _actors:
+		if is_instance_valid(actor):
+			actor.stats.clear_stage_item_bonuses()
+	hud.update_player_stats(_player)
+	hud.update_item_bonuses(_player)
+	if _last_round_won:
+		hud.show_stage_result(
+			true,
+			run_progress,
+			player_cells,
+			ai_cells,
+			int(counts.get("player_locked", 0)),
+			int(counts.get("ai_locked", 0))
+		)
 		_audio_call(&"play_sfx", [&"win"])
 	else:
-		hud.show_result("平局", "%s｜击败：%d" % ["、".join(winners), best_score])
+		hud.show_stage_result(
+			false,
+			run_progress,
+			player_cells,
+			ai_cells,
+			int(counts.get("player_locked", 0)),
+			int(counts.get("ai_locked", 0))
+		)
 		_audio_call(&"play_sfx", [&"draw"])
-	var results: Array[Dictionary] = []
-	for value in _scores.values():
-		results.append((value as Dictionary).duplicate())
-	results.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return int(a.get("kills", 0)) > int(b.get("kills", 0))
-	)
+	var results: Array[Dictionary] = [
+		{
+			"team_id": PaintPalette.TEAM_PLAYER,
+			"color_id": run_progress.player_color_id,
+			"cells": player_cells,
+			"locked": int(counts.get("player_locked", 0)),
+			"won": _last_round_won,
+		},
+		{
+			"team_id": PaintPalette.TEAM_AI,
+			"color_id": run_progress.ai_color_id,
+			"cells": ai_cells,
+			"locked": int(counts.get("ai_locked", 0)),
+			"won": ai_cells > player_cells,
+		},
+	]
 	match_finished.emit(results)
 	get_tree().paused = true
+
+
+func _advance_stage(skill_id: String) -> void:
+	if not _round_over or not _last_round_won:
+		return
+	if run_progress.advance_with_skill(skill_id, _rng):
+		start_match()
+
+
+func _team_color_id(team_id: int) -> String:
+	return (
+		run_progress.player_color_id
+		if team_id == PaintPalette.TEAM_PLAYER
+		else run_progress.ai_color_id
+	)
 
 func _pause_match() -> void:
 	_is_paused = true
@@ -638,38 +810,21 @@ func _resume_match() -> void:
 	_is_paused = false
 	hud.hide_pause()
 
-func _on_map_selected(map_id: String) -> void:
-	settings.map_id = map_id
-	settings.save_to_disk()
-	start_match()
 
-func _on_ai_count_selected(count: int) -> void:
-	settings.ai_count = count
-	settings.save_to_disk()
-	start_match()
+func _open_settings() -> void:
+	if app_state != AppState.MATCH or _round_over:
+		return
+	_is_paused = true
+	hud.show_settings()
+	get_tree().paused = true
 
-func _on_max_speed_changed(value: int) -> void:
-	settings.max_speed = value
-	_apply_caps_and_save()
 
-func _on_max_bubbles_changed(value: int) -> void:
-	settings.max_bubbles = value
-	_apply_caps_and_save()
-
-func _on_max_power_changed(value: int) -> void:
-	settings.max_power = value
-	_apply_caps_and_save()
-
-func _on_bubble_skin_selected(skin: String) -> void:
-	settings.bubble_skin = skin
-	settings.save_to_disk()
-
-func _apply_caps_and_save() -> void:
-	settings.normalize()
-	for actor: GameActor in _actors:
-		if is_instance_valid(actor):
-			actor.clamp_stats()
-	settings.save_to_disk()
+func _close_settings() -> void:
+	hud.hide_settings()
+	if app_state != AppState.MATCH or _round_over:
+		return
+	get_tree().paused = false
+	_is_paused = false
 
 func _ensure_input_actions() -> void:
 	_register_action(&"move_left", [KEY_LEFT, KEY_A])
@@ -677,7 +832,6 @@ func _ensure_input_actions() -> void:
 	_register_action(&"move_up", [KEY_UP, KEY_W])
 	_register_action(&"move_down", [KEY_DOWN, KEY_S])
 	_register_action(&"place_bomb", [KEY_SPACE])
-	_register_action(&"self_rescue", [KEY_1])
 	_register_action(&"pause_game", [KEY_ESCAPE])
 	_register_action(&"zoom_in", [KEY_EQUAL, KEY_PLUS, KEY_KP_ADD])
 	_register_action(&"zoom_out", [KEY_MINUS, KEY_KP_SUBTRACT])
@@ -710,17 +864,155 @@ func _update_time_display() -> void:
 		return
 	_displayed_seconds = total_seconds
 	hud.update_timer(float(total_seconds))
+	hud.update_item_countdown(_seconds_until_next_item())
 	time_changed.emit(total_seconds)
-
-func _prune_ai_item_claims() -> void:
-	var now_ms: int = get_simulation_time_ms()
-	for cell: Vector2i in _ai_item_claims.keys():
-		if int((_ai_item_claims[cell] as Dictionary).get("expires_ms", 0)) <= now_ms:
-			_ai_item_claims.erase(cell)
 
 func _invalidate_ai_forecast() -> void:
 	_ai_hazard_revision += 1
 	_cached_ai_forecast = null
+
+
+func _spawn_due_items() -> void:
+	var interval_ms: int = int(GameConstants.ITEM_SPAWN_INTERVAL_SECONDS * 1000.0)
+	var round_ms: int = int(GameConstants.ROUND_SECONDS * 1000.0)
+	while _next_item_spawn_ms < round_ms \
+			and int(_simulation_time_ms) >= _next_item_spawn_ms:
+		_spawn_random_item()
+		_next_item_spawn_ms += interval_ms
+
+
+func _spawn_random_item() -> int:
+	var candidates: Array[Vector2i] = _item_spawn_candidates()
+	if candidates.is_empty():
+		return 0
+	var cell: Vector2i = candidates[_item_rng.randi_range(0, candidates.size() - 1)]
+	var item_type: int = ArenaItemType.ALL[
+		_item_rng.randi_range(0, ArenaItemType.ALL.size() - 1)
+	]
+	return board.spawn_item(item_type, cell, int(_simulation_time_ms))
+
+
+func _item_spawn_candidates() -> Array[Vector2i]:
+	var occupied: Dictionary = {}
+	for actor: GameActor in _actors:
+		if not is_instance_valid(actor) or actor.stats.is_dead:
+			continue
+		for cell: Vector2i in GameRules.body_cells(actor.position):
+			occupied[cell] = true
+	var candidates: Array[Vector2i] = []
+	for cell: Vector2i in board.get_open_cells():
+		if board.bombs.has(cell) \
+				or board.items_by_cell.has(cell) \
+				or _active_unsafe_cells.has(cell) \
+				or occupied.has(cell):
+			continue
+		candidates.append(cell)
+	return candidates
+
+
+func _resolve_item_pickups() -> void:
+	for actor: GameActor in _actors:
+		if not is_instance_valid(actor) or actor.stats.is_dead or actor.stats.is_trapped:
+			continue
+		var cell: Vector2i = actor.current_cell()
+		if not board.items_by_cell.has(cell):
+			continue
+		var item: ArenaItemState = board.take_item(cell, actor.get_instance_id())
+		if item == null or not actor.stats.apply_stage_item(item.item_type):
+			continue
+		release_item_claim(item.item_id)
+		if actor == _player:
+			hud.show_item_pickup(item.item_type)
+			hud.update_item_bonuses(actor)
+			_audio_call(&"play_sfx", [&"get"])
+
+
+func _seconds_until_next_item() -> int:
+	if _next_item_spawn_ms >= int(GameConstants.ROUND_SECONDS * 1000.0):
+		return -1
+	return maxi(
+		0,
+		ceili(float(_next_item_spawn_ms - int(_simulation_time_ms)) / 1000.0)
+	)
+
+
+func _on_board_item_collected(item: ArenaItemState, _actor_id: int) -> void:
+	release_item_claim(item.item_id)
+
+
+func _on_camera_adjustment_finished(
+		azimuth: float,
+		elevation: float,
+		zoom: float
+	) -> void:
+	settings.camera_azimuth = azimuth
+	settings.camera_elevation = elevation
+	settings.camera_zoom = zoom
+	settings.save_to_disk()
+
+
+func can_claim_item(actor_id: int, item_id: int, travel_ms: int) -> bool:
+	_prune_item_claims()
+	var claim: Dictionary = _item_claims.get(item_id, {}) as Dictionary
+	if claim.is_empty() or int(claim.get("actor_id", 0)) == actor_id:
+		return true
+	var existing_remaining: int = maxi(
+		0,
+		int(claim.get("arrival_ms", 0)) - get_simulation_time_ms()
+	)
+	return travel_ms + ai_profile.item_claim_steal_advantage_ms < existing_remaining
+
+
+func claim_item(actor_id: int, item_id: int, travel_ms: int) -> bool:
+	if not can_claim_item(actor_id, item_id, travel_ms):
+		return false
+	var now_ms: int = get_simulation_time_ms()
+	var lifetime: int = mini(
+		travel_ms + ai_profile.item_claim_grace_ms,
+		ai_profile.maximum_item_claim_ms
+	)
+	_item_claims[item_id] = {
+		"actor_id": actor_id,
+		"arrival_ms": now_ms + travel_ms,
+		"expires_ms": now_ms + maxi(ai_profile.item_claim_grace_ms, lifetime),
+	}
+	return true
+
+
+func release_item_claim(item_id: int, actor_id: int = 0) -> void:
+	if actor_id != 0:
+		var claim: Dictionary = _item_claims.get(item_id, {}) as Dictionary
+		if int(claim.get("actor_id", 0)) != actor_id:
+			return
+	_item_claims.erase(item_id)
+
+
+func release_item_claims_for_actor(actor_id: int) -> void:
+	for item_id: Variant in _item_claims.keys():
+		var claim: Dictionary = _item_claims[item_id] as Dictionary
+		if int(claim.get("actor_id", 0)) == actor_id:
+			_item_claims.erase(item_id)
+
+
+func _prune_item_claims() -> void:
+	var now_ms: int = get_simulation_time_ms()
+	for item_id: Variant in _item_claims.keys():
+		var claim: Dictionary = _item_claims[item_id] as Dictionary
+		var actor_id: int = int(claim.get("actor_id", 0))
+		var actor: GameActor = _actor_by_id(actor_id)
+		if now_ms >= int(claim.get("expires_ms", 0)) \
+				or board.item_by_id(int(item_id)) == null \
+				or not is_instance_valid(actor) \
+				or actor.stats.is_dead \
+				or actor.stats.is_trapped:
+			_item_claims.erase(item_id)
+
+
+func _actor_by_id(actor_id: int) -> GameActor:
+	for actor: GameActor in _actors:
+		if is_instance_valid(actor) and actor.get_instance_id() == actor_id:
+			return actor
+	return null
 
 func _audio_call(method: StringName, arguments: Array = []) -> void:
 	if "--mute" in OS.get_cmdline_user_args():
