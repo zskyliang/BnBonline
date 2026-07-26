@@ -14,7 +14,7 @@ func _run() -> void:
 	root.add_child(match_node)
 	await process_frame
 	match_node.call("_enter_lobby")
-	match_node.settings.character_id = "builder"
+	match_node.settings.character_id = "cat"
 	match_node.settings.player_color_id = "orange"
 	match_node.call("_begin_new_run")
 	match_node.start_match()
@@ -63,6 +63,10 @@ func _run() -> void:
 	_assert(
 		paused and match_node.hud.is_settings_visible(),
 		"settings button modal pauses and blocks the live match"
+	)
+	_assert(
+		match_node.hud.find_children("*", "HSlider", true, false).is_empty(),
+		"fixed-camera settings contain no azimuth or elevation sliders"
 	)
 	match_node.call("_close_settings")
 	_assert(
@@ -139,6 +143,12 @@ func _run() -> void:
 	_assert(player.stats.move_speed == 175.0, "respawn preserves current-stage item bonuses")
 	player.position = GameConstants.grid_to_world(Vector2i(7, 6))
 	_assert(match_node.request_bomb(player), "player can place a colored bubble")
+	var player_view := match_node._arena_view.actor_view_for(player)
+	_assert(
+		is_instance_valid(player_view) \
+			and player_view.get_current_action() == &"PlaceBubble",
+		"successful placement triggers only the cat visual action"
+	)
 	var bubble := match_node.board.bombs.get(Vector2i(7, 6)) as GameBubble
 	_assert(is_instance_valid(bubble) and bubble.color_id == "orange", "bubble uses player color")
 	bubble.explode_now()
@@ -232,6 +242,7 @@ func _run() -> void:
 	match_node.call("_resolve_explosion_hits")
 	_assert(not ai_actors[1].stats.is_trapped, "AI teammate ignores friendly explosion")
 	player = match_node.get_player()
+	player_view = match_node._arena_view.actor_view_for(player)
 	player.position = GameConstants.grid_to_world(friendly_cell)
 	match_node.call("_resolve_explosion_hits")
 	match_node.call("_resolve_explosion_hits")
@@ -242,6 +253,10 @@ func _run() -> void:
 	match_node.board.paint_cells([victory_cell], PaintPalette.TEAM_PLAYER)
 	match_node.call("_end_round")
 	_assert(match_node._last_round_won, "strictly higher player territory wins")
+	_assert(
+		player_view.get_current_action() == &"Victory",
+		"winning settlement triggers the cat victory action"
+	)
 	_assert(
 		player.stats.stage_speed_items == 0 and player.stats.move_speed == 160.0,
 		"round settlement removes temporary item bonuses"

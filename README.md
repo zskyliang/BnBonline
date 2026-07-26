@@ -1,6 +1,6 @@
-# BnBonline Godot
+# 森林泡泡染色战
 
-基于 Godot 4.6 的单机染色占格闯关游戏。玩家选择一名软陶角色和阵营颜色，
+基于 Godot 4.6 的 2.5D 手绘动物染色占格闯关游戏。玩家选择一只动物和阵营颜色，
 在三分钟内用水泡爆炸覆盖地板，对抗共用另一种颜色的 AI 队。
 
 ## 运行
@@ -21,15 +21,15 @@ godot --editor --path .
 
 - 方向键或 `WASD`：移动
 - 空格：放置水泡
-- 按住鼠标右键拖动：调整水平角与俯视角
 - 鼠标滚轮或 `+` / `-`：缩放地图
-- 数字 `0`：恢复推荐角度与 110% 缩放
-- 对局右上角“设置”：打开镜头设置模态框并暂停对局
+- 数字 `0`：恢复 110% 缩放
+- 对局使用固定正交镜头（方位角 `-30°`、俯角 `42°`）
+- 对局右上角“设置”：打开缩放设置并暂停对局
 - `Esc`：暂停或继续
 
 ## 染色闯关
 
-- 大厅可从 8 名角色和红、橙、黄、绿、青、蓝、紫七种服装颜色中选择。
+- 大厅可从猫、狗、兔、熊、狐狸、浣熊、企鹅、水豚和七种局部队色中选择。
 - 竞技场为完整 15×13 地板网格，不含障碍、建筑或箱子。
 - 第 10 秒起每隔 10 秒随机生成速度、水泡数或威力道具；本关内可无限叠加，
   复活后保留，结算或重试时清空。
@@ -49,7 +49,8 @@ godot --editor --path .
 ```bash
 godot --headless --path . --import --quit
 godot --headless --path . --script res://tests/test_runner.gd
-godot --headless --path . --script res://tests/character_clay_runner.gd -- --mute
+godot --headless --path . --script res://tests/storybook_asset_runner.gd -- --mute
+godot --headless --path . --script res://tests/storybook_visual_runner.gd -- --mute
 godot --headless --path . --script res://tests/smoke_runner.gd -- --mute
 godot --headless --path . --script res://tests/ai_benchmark_runner.gd -- --mute
 godot --headless --path . --script res://tests/ai_item_training_runner.gd -- --mute
@@ -72,10 +73,12 @@ godot --headless --path . --export-release Web build/web/index.html
 并通过道具认领避免多个 AI 重复追逐。已有水泡且仍有容量时，AI 会在每段
 安全逃生路线末端优先继续放泡，主动把可用槽位压到 0～1 个。
 
-角色 GLB 来自 Quaternius Ultimate Animated Character Pack，道具来自 CC0 的
-Kenney Platformer Kit；背景音乐改用 OpenGameArt 的萌系 CC0 无缝循环，放泡、
-出现和爆炸使用柔和的水泡/短促 pop，结算与交互使用 Kenney 及 OpenGameArt
-的拨弦短音。许可记录保留在各自的 `THIRD_PARTY_ASSETS.md`。中文字体为 OFL
+八角色 GLB、三种道具、水泡与爆炸形状、195 格地砖、森林外框及大厅场景均由
+项目内 Blender MCP 流水线原创生成，源 `.blend` 与可复现脚本位于
+`art/blender/`，不会打入 Web 包。角色共用 10 骨骼和六个 8 FPS 阶梯动作；
+`Waddle` 使用张臂平衡、左右脚交替抬落和明显重心切换。ImageGen 参考图与完整
+提示词保存在 `art/reference/`，只用于建模参考，不作为运行时贴图。背景音乐和
+音效的许可记录保留在 `assets/audio/THIRD_PARTY_ASSETS.md`。中文字体为 OFL
 授权的 Noto Sans SC 项目字符子集；新增运行时文案后执行：
 
 ```bash

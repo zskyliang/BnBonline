@@ -2,6 +2,11 @@ class_name BoardView3D
 extends Node3D
 ## Batched 15x13 paint floor with incremental ownership and lock updates.
 
+const FLOOR_TILE_SCENE := \
+	"res://assets/models/environment/storybook/storybook_floor_tile.glb"
+const FOREST_DECOR_SCENE := \
+	"res://assets/models/environment/storybook/forest_board_decor.glb"
+
 var board: GameBoard
 var _world_root: Node3D
 var _floor_instance: MultiMeshInstance3D
@@ -33,12 +38,9 @@ func rebuild() -> void:
 	if not is_instance_valid(board) or board.paint_owners.is_empty():
 		return
 	_build_floor_base()
+	_build_forest_decor()
 	_build_floor_tiles()
 	_build_lock_shadows()
-
-
-func get_building_views() -> Array[ClayBuildingView3D]:
-	return []
 
 
 func _on_board_reset() -> void:
@@ -67,13 +69,29 @@ func _build_floor_base() -> void:
 	)
 	base.mesh = mesh
 	base.position.y = -0.08
-	base.material_override = ClayMaterialLibrary.make(Color("#a98268"), 0.94)
+	base.material_override = StorybookMaterialLibrary.make(
+		StorybookMaterialLibrary.WOOD,
+		0.94,
+		false
+	)
 	_world_root.add_child(base)
 
 
+func _build_forest_decor() -> void:
+	var packed := load(FOREST_DECOR_SCENE) as PackedScene
+	if packed == null:
+		push_warning("Forest board decor GLB is unavailable.")
+		return
+	var instance := packed.instantiate() as Node3D
+	if instance == null:
+		return
+	instance.name = "ForestBoardDecor"
+	_world_root.add_child(instance)
+	StorybookMaterialLibrary.apply_character_palette(instance, Color.WHITE, [], false)
+
+
 func _build_floor_tiles() -> void:
-	var tile_mesh := BoxMesh.new()
-	tile_mesh.size = Vector3(0.965, 0.08, 0.965)
+	var tile_mesh := _load_storybook_tile_mesh()
 	var multi_mesh := MultiMesh.new()
 	multi_mesh.transform_format = MultiMesh.TRANSFORM_3D
 	multi_mesh.use_colors = true
@@ -93,11 +111,32 @@ func _build_floor_tiles() -> void:
 	_floor_instance = MultiMeshInstance3D.new()
 	_floor_instance.name = "PaintFloorTiles"
 	_floor_instance.multimesh = multi_mesh
-	var material := ClayMaterialLibrary.make(Color.WHITE, 0.94).duplicate() as StandardMaterial3D
+	var material := StorybookMaterialLibrary.make(
+		Color.WHITE,
+		0.94,
+		true
+	).duplicate() as StandardMaterial3D
 	material.vertex_color_use_as_albedo = true
 	_floor_instance.material_override = material
 	_floor_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_world_root.add_child(_floor_instance)
+
+
+func _load_storybook_tile_mesh() -> Mesh:
+	var packed := load(FLOOR_TILE_SCENE) as PackedScene
+	if packed != null:
+		var instance := packed.instantiate()
+		for node: Node in instance.find_children("*", "MeshInstance3D", true, false):
+			var mesh_instance := node as MeshInstance3D
+			if mesh_instance.mesh != null:
+				var imported_mesh := mesh_instance.mesh
+				instance.free()
+				return imported_mesh
+		instance.free()
+	push_warning("Storybook floor tile GLB is unavailable; using a box fallback.")
+	var fallback := BoxMesh.new()
+	fallback.size = Vector3(0.965, 0.08, 0.965)
+	return fallback
 
 
 func _build_lock_shadows() -> void:

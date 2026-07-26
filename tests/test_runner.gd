@@ -31,11 +31,12 @@ func _test_palette_and_settings() -> void:
 		unique_colors[PaintPalette.get_color(color_id).to_html()] = true
 	_check(unique_colors.size() == 7, "all seven paint colors are visually distinct")
 	_check(
-		MatchSettings.WEB_STORAGE_KEY == "bnb.settings.v5" \
+		MatchSettings.WEB_STORAGE_KEY == "bnb.settings.v6" \
+			and "bnb.settings.v5" in MatchSettings.LEGACY_WEB_STORAGE_KEYS \
 			and "bnb.settings.v4" in MatchSettings.LEGACY_WEB_STORAGE_KEYS \
 			and "bnb.settings.v3" in MatchSettings.LEGACY_WEB_STORAGE_KEYS \
 			and "bnb.settings.v2" in MatchSettings.LEGACY_WEB_STORAGE_KEYS,
-		"web camera settings migrate from v4, v3, and v2 into v5"
+		"appearance and zoom settings migrate from v5 through v2 into v6"
 	)
 	var legacy_settings := MatchSettings.new()
 	legacy_settings.apply_dictionary({"character_id": "ninja"})
@@ -55,31 +56,36 @@ func _test_palette_and_settings() -> void:
 		"camera_elevation": -999.0,
 		"camera_zoom": 9.0,
 	})
-	_check(settings.character_id == "wizard", "legacy dictionaries preserve character selection")
+	_check(settings.character_id == "bear", "legacy role IDs migrate by original card order")
 	_check(settings.player_color_id == "purple", "paint color survives settings application")
 	settings.apply_dictionary({"character_id": "missing", "player_color_id": "missing"})
-	_check(settings.character_id == "builder", "invalid character falls back")
+	_check(settings.character_id == "cat", "invalid character falls back to cat")
 	_check(
 		settings.player_color_id == PaintPalette.DEFAULT_PLAYER_COLOR_ID,
 		"invalid paint color falls back"
 	)
 	_check(
-		settings.camera_azimuth == MatchSettings.MAX_CAMERA_AZIMUTH \
-			and settings.camera_elevation == MatchSettings.MIN_CAMERA_ELEVATION \
+		settings.camera_azimuth == MatchSettings.DEFAULT_CAMERA_AZIMUTH \
+			and settings.camera_elevation == MatchSettings.DEFAULT_CAMERA_ELEVATION \
 			and settings.camera_zoom == MatchSettings.MAX_CAMERA_ZOOM,
-		"camera settings clamp corrupt or legacy values"
+		"legacy angles are ignored while corrupt zoom is clamped"
 	)
 	_check(
-		settings.to_dictionary().keys().size() == 5,
-		"appearance and all three camera values are persisted"
+		settings.to_dictionary().keys().size() == 3 \
+			and not settings.to_dictionary().has("camera_azimuth") \
+			and not settings.to_dictionary().has("camera_elevation"),
+		"only character, team color, and zoom are persisted"
 	)
 
 
 func _test_flat_map() -> void:
 	var map_data: MapData = MapCatalog.get_map()
 	_check(map_data.map_id == MapCatalog.PAINT_ARENA, "single paint arena has the stable ID")
-	_check(map_data.building_units.is_empty(), "paint arena has no buildings")
 	_check(map_data.decorations.is_empty(), "paint arena has no decorations")
+	_check(
+		map_data.camera_bounds.size.x >= 17.0 and map_data.camera_bounds.size.z >= 15.0,
+		"fixed camera bounds include the playable grid and exterior forest frame"
+	)
 	var open_count: int = 0
 	for row: PackedInt32Array in map_data.barrier_cells:
 		for code: int in row:
@@ -200,12 +206,12 @@ func _test_run_progression() -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 20260725
 	var progress := RunProgress.new()
-	progress.begin("ninja", "cyan", rng)
+	progress.begin("fox", "cyan", rng)
 	_check(progress.stage_number == 1, "campaign begins at stage one")
 	_check(progress.ai_count() == 1, "stage one has one AI")
 	_check(progress.ai_color_id != "cyan", "AI color differs from player color")
 	_check(progress.ai_character_ids.size() == 4, "four stable AI identities are prepared")
-	_check("ninja" not in progress.ai_character_ids, "AI roster excludes player character")
+	_check("fox" not in progress.ai_character_ids, "AI roster excludes player animal")
 	var stats := ActorStats.new()
 	progress.apply_allocation(stats, progress.player_allocation())
 	_check(stats.move_speed == 150.0, "campaign uses base speed")
@@ -229,7 +235,7 @@ func _test_run_progression() -> void:
 	_check(stats.bubble_capacity == 4, "bubble points stack without the old cap")
 	_check(stats.power == 3, "power point carries into later stages")
 	var long_run := RunProgress.new()
-	long_run.begin("builder", "red", rng)
+	long_run.begin("cat", "red", rng)
 	for _point: int in range(25):
 		long_run.advance_with_skill(RunProgress.SKILL_SPEED, rng)
 	long_run.apply_allocation(stats, long_run.player_allocation())

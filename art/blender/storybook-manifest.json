@@ -1,0 +1,45 @@
+{
+  "version": "storybook-production-v1",
+  "generated_at": "2026-07-26",
+  "blender_version": "5.2.0 LTS",
+  "status": "accepted",
+  "generators": [
+    "scripts/generate_storybook_characters.py",
+    "scripts/generate_storybook_world_assets.py"
+  ],
+  "shared_actions": [
+    "Idle",
+    "Waddle",
+    "PlaceBubble",
+    "Trapped",
+    "Defeat",
+    "Victory"
+  ],
+  "animation_fps": 8,
+  "height": 1.3,
+  "bones": 10,
+  "team_tint_material_names": [
+    "TeamTint",
+    "FootRing"
+  ],
+  "characters": {
+    "cat": {"triangles": 3696, "vertices": 1908, "glb_sha256": "f057514ae95e0162ed10ea341c5f4d543c07d97af911c088c903e5f66adf3d2a", "blend_sha256": "68caad176cdafcd4fcde5631cee83fb879b8188479936d53ae09240eb217236f"},
+    "dog": {"triangles": 3988, "vertices": 2046, "glb_sha256": "c63d6550d75b2806a3028c21cec5fdd198eb9d99f9ed790b7d41b739b00ea89a", "blend_sha256": "3cda4dbacb7193a9128e43ed74c747046afbefb3e3ac3891350178f93713926d"},
+    "rabbit": {"triangles": 4052, "vertices": 2076, "glb_sha256": "e121712934950cc290c178ccb907e320de93566c1b81ae7b135d9af9721b3736", "blend_sha256": "e16f73a64b9212f15c1f20c508cea4d107dc0cd189178aa5234ad90efca38740"},
+    "bear": {"triangles": 3476, "vertices": 1788, "glb_sha256": "869057b29017fd7d9946c63e016cd5fc728c4ee88806b3cbfe8ab606ad9ea547", "blend_sha256": "b59ec3808d94fd47b2dcbbbcbc69147ac796ac23354c82fbc86870e6bc9f10d6"},
+    "fox": {"triangles": 3652, "vertices": 1884, "glb_sha256": "922ce5545b8caf6aa1e09467f40e88dc7aac03e596a21e9822b715818e23986e", "blend_sha256": "961d5d79b7c2ba011e40deb5600193c84d765cd7b4b2326a9e97fd48fb6b7566"},
+    "raccoon": {"triangles": 4164, "vertices": 2142, "glb_sha256": "3dc1f7282b8a0791e4fe670b92aa767e8c71126c22f224204967bc1580c72095", "blend_sha256": "0b57c576ac9639c92262912e843465eb3a689e2f59107f4bb60580d7673c5100"},
+    "penguin": {"triangles": 2816, "vertices": 1440, "glb_sha256": "3448ab764c1be74b0f8384f518034cbde9668093c24860e1be9ef3f0e51a2d5a", "blend_sha256": "9514a3a4006a2e35a37c3961962b5752f9d07c7070f991ed2d1089721923cbb6"},
+    "capybara": {"triangles": 3556, "vertices": 1830, "glb_sha256": "13aa11c7fc8d9fb5743587327781d1d74c235f3ac1f510f08f76207bad8527ff", "blend_sha256": "aba23905c1e21ab811bb34564513b4dd2739b582616e44bc093334e823f32118"}
+  },
+  "world_assets": {
+    "leaf_shoes": {"triangles": 1416, "vertices": 728, "glb_sha256": "4b952863e0fb3e65f1a828ab2b9c865aecb91a06df2275a0d8c16f911d7a6c7e"},
+    "bubble_gourd": {"triangles": 756, "vertices": 388, "glb_sha256": "88a58f3b7b6f1c3d5a34a93cc056b7078f706006c99d6f07f6772a4133cfba5f"},
+    "paw_burst": {"triangles": 676, "vertices": 350, "glb_sha256": "0f6261d050f797a08b6df52557bf97cbc8dbdf57ec31bb5e76075095871366a7"},
+    "bubble_bomb": {"triangles": 620, "vertices": 320, "glb_sha256": "73d61f70a2a741097146788fbfb03b8c31a47b99099be396fe1da79aac105be8"},
+    "effect_shapes": {"triangles": 360, "vertices": 186, "glb_sha256": "19c7ef722f4e5b20b3ab526d025f0c5fdf54864915c64654873e9e792f236db7"},
+    "storybook_floor_tile": {"triangles": 156, "vertices": 80, "glb_sha256": "587ebae54b0fe63717dd8bc9e28f1e721c057996412b66ee9db62896bbd52047"},
+    "forest_board_decor": {"triangles": 2072, "vertices": 1120, "glb_sha256": "82018825e193c384204ff43654db5b1e68297a7c61f60820cc2d3320d765d39c"},
+    "storybook_lobby": {"triangles": 2048, "vertices": 1092, "glb_sha256": "d32f226374f0f772e0c8d77454c06307335b8f80ef99bcf7125f40f2c43eb272"}
+  }
+}

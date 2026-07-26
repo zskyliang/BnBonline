@@ -24,7 +24,7 @@ func _run() -> void:
 	root.add_child(match_node)
 	await process_frame
 	match_node.call("_enter_lobby")
-	match_node.settings.character_id = "builder"
+	match_node.settings.character_id = "cat"
 	match_node.settings.player_color_id = "red"
 	match_node._rng.seed = 20260726
 	match_node.call("_begin_new_run")

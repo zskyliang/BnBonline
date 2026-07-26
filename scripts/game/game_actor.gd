@@ -20,7 +20,7 @@ var settings: MatchSettings
 var last_attacker: GameActor
 var last_attacker_team: int = PaintPalette.TEAM_NEUTRAL
 var unsafe_frame_count: int = 0
-var character_id: String = "builder"
+var character_id: String = "cat"
 var color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
 var was_finished_by_enemy_touch: bool = false
 

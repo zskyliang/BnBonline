@@ -334,6 +334,7 @@ func request_bomb(actor: GameActor) -> bool:
 	# transaction. Defer it so AI planning frames stay bounded under four actors.
 	_arena_view.call_deferred("add_bubble", bubble)
 	actor.stats.active_bubbles += 1
+	_arena_view.play_actor_action(actor, &"PlaceBubble")
 	_audio_call(&"play_sfx", [&"lay"])
 	return true
 
@@ -486,7 +487,7 @@ func _spawn_actor(
 		team_id: int,
 		is_player_actor: bool,
 		spawn_cell: Vector2i,
-		character_id: String = "builder",
+		character_id: String = "cat",
 		color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
 	) -> GameActor:
 	var actor := GameActor.new()
@@ -628,6 +629,7 @@ func _resolve_touch_pair(left: GameActor, right: GameActor) -> void:
 
 func _on_actor_died(victim: GameActor, defeating_team: int, attacker: GameActor) -> void:
 	_audio_call(&"play_sfx", [&"die"])
+	_arena_view.play_actor_action(victim, &"Defeat")
 	release_item_claims_for_actor(victim.get_instance_id())
 	var has_opposing_defeater: bool = defeating_team in [
 		PaintPalette.TEAM_PLAYER,
@@ -649,6 +651,7 @@ func _on_actor_died(victim: GameActor, defeating_team: int, attacker: GameActor)
 
 func _on_actor_trapped(victim: GameActor, _attacker: GameActor) -> void:
 	release_item_claims_for_actor(victim.get_instance_id())
+	_arena_view.play_actor_action(victim, &"Trapped")
 
 func _respawn_later(actor: GameActor) -> void:
 	if not is_instance_valid(actor):
@@ -714,7 +717,7 @@ func _update_scoreboard() -> void:
 			"character_id": (
 				run_progress.ai_character_ids[0]
 				if not run_progress.ai_character_ids.is_empty()
-				else "builder"
+				else "cat"
 			),
 		},
 	]
@@ -741,6 +744,13 @@ func _end_round() -> void:
 	_last_round_won = player_cells > ai_cells
 	for actor: GameActor in _actors:
 		if is_instance_valid(actor):
+			var actor_won := (
+				actor.team_id == PaintPalette.TEAM_PLAYER and _last_round_won
+			) or (
+				actor.team_id == PaintPalette.TEAM_AI and ai_cells > player_cells
+			)
+			if actor_won:
+				_arena_view.play_actor_action(actor, &"Victory")
 			actor.stats.clear_stage_item_bonuses()
 	hud.update_player_stats(_player)
 	hud.update_item_bonuses(_player)
@@ -941,13 +951,13 @@ func _on_board_item_collected(item: ArenaItemState, _actor_id: int) -> void:
 
 
 func _on_camera_adjustment_finished(
-		azimuth: float,
-		elevation: float,
+		_azimuth: float,
+		_elevation: float,
 		zoom: float
 	) -> void:
-	settings.camera_azimuth = azimuth
-	settings.camera_elevation = elevation
 	settings.camera_zoom = zoom
+	settings.camera_azimuth = MatchSettings.DEFAULT_CAMERA_AZIMUTH
+	settings.camera_elevation = MatchSettings.DEFAULT_CAMERA_ELEVATION
 	settings.save_to_disk()
 
 

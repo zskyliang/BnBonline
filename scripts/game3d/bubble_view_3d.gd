@@ -1,8 +1,10 @@
 class_name BubbleView3D
 extends Node3D
-## Hand-pressed clay water bomb with stepped fuse anticipation.
+## Team-colored storybook soap bubble with stepped fuse anticipation.
 
 const STOP_MOTION_STEP := 1.0 / 12.0
+const BUBBLE_MODEL_PATH := \
+	"res://assets/models/effects/storybook/bubble_bomb.glb"
 var bubble: GameBubble
 var _initial_fuse_ms := 1
 var _visual_accumulator := 0.0
@@ -61,25 +63,41 @@ func _apply_stop_motion_pose() -> void:
 	for index: int in range(_pressure_dimples.size()):
 		var dimple := _pressure_dimples[index]
 		var lit := index < active_dimples
-		dimple.material_override = ClayMaterialLibrary.make(
-			ClayMaterialLibrary.CREAM if lit else _skin_color.darkened(0.2),
+		dimple.material_override = StorybookMaterialLibrary.make(
+			StorybookMaterialLibrary.PAPER if lit else _skin_color.darkened(0.2),
 			0.84,
+			false,
 			0.24 if lit else 0.0
 		)
 
 
 func _build_visual() -> void:
-	_inner_body = MeshInstance3D.new()
-	_inner_body.name = "MatteClayWaterCore"
-	var inner_mesh := SphereMesh.new()
-	inner_mesh.radius = 0.31
-	inner_mesh.height = 0.62
-	inner_mesh.radial_segments = 14
-	inner_mesh.rings = 7
-	_inner_body.mesh = inner_mesh
-	_inner_body.scale = Vector3(1.05, 0.95, 1.0)
-	_inner_body.material_override = ClayMaterialLibrary.make(_skin_color, 0.86)
-	add_child(_inner_body)
+	var packed := load(BUBBLE_MODEL_PATH) as PackedScene
+	if packed != null:
+		var model := packed.instantiate() as Node3D
+		if model != null:
+			model.name = "StorybookBubbleModel"
+			model.position.y = -0.34
+			add_child(model)
+			StorybookMaterialLibrary.apply_character_palette(
+				model,
+				_skin_color,
+				["TeamTint"]
+			)
+			_inner_body = model.find_child("BubbleCore", true, false) as MeshInstance3D
+			_cork_root = model.find_child("LeafCork", true, false) as Node3D
+	if not is_instance_valid(_inner_body):
+		_inner_body = MeshInstance3D.new()
+		_inner_body.name = "StorybookBubbleFallback"
+		var inner_mesh := SphereMesh.new()
+		inner_mesh.radius = 0.31
+		inner_mesh.height = 0.62
+		inner_mesh.radial_segments = 14
+		inner_mesh.rings = 7
+		_inner_body.mesh = inner_mesh
+		_inner_body.scale = Vector3(1.05, 0.95, 1.0)
+		_inner_body.material_override = StorybookMaterialLibrary.make(_skin_color, 0.86)
+		add_child(_inner_body)
 
 	_outer_shell = MeshInstance3D.new()
 	_outer_shell.name = "ThinWaterShell"
@@ -99,36 +117,29 @@ func _build_visual() -> void:
 	shell_material.roughness = 0.34
 	shell_material.normal_enabled = true
 	shell_material.normal_scale = 0.1
-	shell_material.normal_texture = load("res://assets/materials/clay_detail_normal.png")
+	shell_material.normal_texture = load("res://assets/materials/storybook_paper_normal.png")
 	_outer_shell.material_override = shell_material
 	_outer_shell.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(_outer_shell)
 
-	_cork_root = Node3D.new()
-	_cork_root.name = "CorkAndFuse"
-	_cork_root.position = Vector3(0.0, 0.35, 0.0)
-	add_child(_cork_root)
-	var cork := MeshInstance3D.new()
-	var cork_mesh := CylinderMesh.new()
-	cork_mesh.top_radius = 0.075
-	cork_mesh.bottom_radius = 0.09
-	cork_mesh.height = 0.15
-	cork_mesh.radial_segments = 9
-	cork.mesh = cork_mesh
-	cork.position.y = 0.06
-	cork.material_override = ClayMaterialLibrary.make(Color("#9d684d"), 0.94)
-	_cork_root.add_child(cork)
-	var fuse := MeshInstance3D.new()
-	var fuse_mesh := CylinderMesh.new()
-	fuse_mesh.top_radius = 0.022
-	fuse_mesh.bottom_radius = 0.03
-	fuse_mesh.height = 0.24
-	fuse_mesh.radial_segments = 8
-	fuse.mesh = fuse_mesh
-	fuse.position = Vector3(0.07, 0.19, 0.0)
-	fuse.rotation.z = deg_to_rad(32.0)
-	fuse.material_override = ClayMaterialLibrary.make(ClayMaterialLibrary.CHARCOAL, 0.94)
-	_cork_root.add_child(fuse)
+	if not is_instance_valid(_cork_root):
+		_cork_root = Node3D.new()
+		_cork_root.name = "LeafCorkFallback"
+		_cork_root.position = Vector3(0.0, 0.35, 0.0)
+		add_child(_cork_root)
+		var cork := MeshInstance3D.new()
+		var cork_mesh := CylinderMesh.new()
+		cork_mesh.top_radius = 0.075
+		cork_mesh.bottom_radius = 0.09
+		cork_mesh.height = 0.15
+		cork_mesh.radial_segments = 9
+		cork.mesh = cork_mesh
+		cork.position.y = 0.06
+		cork.material_override = StorybookMaterialLibrary.make(
+			Color("#9d684d"),
+			0.94
+		)
+		_cork_root.add_child(cork)
 
 	for index: int in range(3):
 		var dimple := MeshInstance3D.new()
@@ -140,6 +151,10 @@ func _build_visual() -> void:
 		dimple_mesh.rings = 4
 		dimple.mesh = dimple_mesh
 		dimple.position = Vector3(-0.17 + float(index) * 0.17, 0.08 - float(index % 2) * 0.06, 0.31)
-		dimple.material_override = ClayMaterialLibrary.make(_skin_color.darkened(0.2), 0.86)
+		dimple.material_override = StorybookMaterialLibrary.make(
+			_skin_color.darkened(0.2),
+			0.86,
+			false
+		)
 		_pressure_dimples.append(dimple)
 		add_child(dimple)

@@ -1,12 +1,12 @@
 class_name ItemView3D
 extends Node3D
-## Lightweight animated wrapper around one imported CC0 pickup model.
+## Lightweight animated wrapper around one original storybook pickup model.
 
 var item_id: int
 var item_type: int
 
 var _model_root: Node3D
-var _base_height: float = 0.46
+var _base_height: float = 0.12
 var _elapsed: float = 0.0
 
 
@@ -35,6 +35,12 @@ func _build_visual() -> void:
 	if packed != null:
 		var model: Node = packed.instantiate()
 		_model_root.add_child(model)
+		if model is Node3D:
+			StorybookMaterialLibrary.apply_character_palette(
+				model as Node3D,
+				Color.WHITE,
+				[]
+			)
 	else:
 		_model_root.add_child(_fallback_mesh())
 
@@ -46,38 +52,24 @@ func _build_visual() -> void:
 	ring_mesh.rings = 12
 	ring_mesh.ring_segments = 24
 	ring.mesh = ring_mesh
-	ring.position.y = -0.37
-	ring.material_override = ClayMaterialLibrary.make(
+	ring.position.y = -0.085
+	ring.material_override = StorybookMaterialLibrary.make(
 		ArenaItemType.accent_color(item_type),
 		0.88,
+		false,
 		0.12
 	)
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(ring)
 
-	if item_type == ArenaItemType.Value.BUBBLE:
-		var marker := Label3D.new()
-		marker.name = "BubblePlusOne"
-		marker.text = "+1"
-		marker.font_size = 42
-		marker.modulate = Color("#eef6ff")
-		marker.outline_size = 8
-		marker.outline_modulate = Color("#294f9b")
-		marker.position = Vector3(0.0, 0.48, 0.0)
-		marker.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		marker.no_depth_test = true
-		add_child(marker)
-
-
 func _model_scale() -> float:
 	match item_type:
 		ArenaItemType.Value.SPEED:
-			# The spring source mesh is much wider than the other two assets.
 			return 0.72
 		ArenaItemType.Value.BUBBLE:
-			return 1.0
+			return 0.62
 		ArenaItemType.Value.POWER:
-			return 1.45
+			return 0.78
 		_:
 			return 1.0
 
@@ -88,7 +80,7 @@ func _fallback_mesh() -> MeshInstance3D:
 	mesh.radius = 0.24
 	mesh.height = 0.48
 	mesh_instance.mesh = mesh
-	mesh_instance.material_override = ClayMaterialLibrary.make(
+	mesh_instance.material_override = StorybookMaterialLibrary.make(
 		ArenaItemType.accent_color(item_type),
 		0.9
 	)

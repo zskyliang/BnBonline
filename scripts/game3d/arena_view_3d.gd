@@ -8,7 +8,6 @@ signal zoom_changed(percent: int)
 const CAMERA_DISTANCE := 28.0
 const CAMERA_MARGIN := 1.14
 const ZOOM_STEP := 0.1
-const ORBIT_SENSITIVITY_DEGREES := 0.22
 
 var board_view: BoardView3D
 var actor_root: Node3D
@@ -22,8 +21,8 @@ var _fitted_camera_size: float = 20.0
 var _azimuth: float = MatchSettings.DEFAULT_CAMERA_AZIMUTH
 var _elevation: float = MatchSettings.DEFAULT_CAMERA_ELEVATION
 var _zoom: float = MatchSettings.DEFAULT_CAMERA_ZOOM
-var _orbit_dragging: bool = false
 var _item_views: Dictionary = {}
+var _actor_views: Dictionary = {}
 
 
 func _ready() -> void:
@@ -37,8 +36,8 @@ func _ready() -> void:
 	actor_root = Node3D.new()
 	actor_root.name = "ActorViews3D"
 	add_child(actor_root)
-	explosion_root = ClayExplosionPool.new()
-	explosion_root.name = "ClayExplosionPool"
+	explosion_root = StorybookExplosionPool.new()
+	explosion_root.name = "StorybookExplosionPool"
 	add_child(explosion_root)
 	item_root = Node3D.new()
 	item_root.name = "ArenaItemViews3D"
@@ -71,8 +70,9 @@ func clear_entities() -> void:
 		for child in root.get_children():
 			child.queue_free()
 	_clear_item_views()
-	if explosion_root is ClayExplosionPool:
-		(explosion_root as ClayExplosionPool).release_all()
+	_actor_views.clear()
+	if explosion_root is StorybookExplosionPool:
+		(explosion_root as StorybookExplosionPool).release_all()
 
 
 func add_actor(
@@ -83,7 +83,25 @@ func add_actor(
 	var view := ActorView3D.new()
 	actor_root.add_child(view)
 	view.bind_actor(actor, character_id, color_id)
+	var actor_id := actor.get_instance_id()
+	_actor_views[actor_id] = view
+	actor.tree_exiting.connect(_on_actor_exiting.bind(actor_id), CONNECT_ONE_SHOT)
 	return view
+
+
+func play_actor_action(actor: GameActor, action: StringName) -> bool:
+	if not is_instance_valid(actor):
+		return false
+	var view: ActorView3D = _actor_views.get(actor.get_instance_id()) as ActorView3D
+	if not is_instance_valid(view):
+		return false
+	return view.play_action(action)
+
+
+func actor_view_for(actor: GameActor) -> ActorView3D:
+	if not is_instance_valid(actor):
+		return null
+	return _actor_views.get(actor.get_instance_id()) as ActorView3D
 
 
 func add_bubble(bubble: GameBubble) -> BubbleView3D:
@@ -106,7 +124,7 @@ func add_item(item: ArenaItemState) -> ItemView3D:
 
 
 func add_explosion(effect: ExplosionEffect) -> ExplosionView3D:
-	return (explosion_root as ClayExplosionPool).spawn(effect)
+	return (explosion_root as StorybookExplosionPool).spawn(effect)
 
 
 func play_defeat_burst(center_cell: Vector2i, color_id: String, raw_cells: Array) -> void:
@@ -162,17 +180,9 @@ func set_zoom(value: float) -> void:
 	_emit_pose_changed()
 
 
-func set_camera_pose(azimuth: float, elevation: float, zoom: float) -> void:
-	_azimuth = clampf(
-		azimuth,
-		MatchSettings.MIN_CAMERA_AZIMUTH,
-		MatchSettings.MAX_CAMERA_AZIMUTH
-	)
-	_elevation = clampf(
-		elevation,
-		MatchSettings.MIN_CAMERA_ELEVATION,
-		MatchSettings.MAX_CAMERA_ELEVATION
-	)
+func set_camera_pose(_azimuth_value: float, _elevation_value: float, zoom: float) -> void:
+	_azimuth = MatchSettings.DEFAULT_CAMERA_AZIMUTH
+	_elevation = MatchSettings.DEFAULT_CAMERA_ELEVATION
 	_zoom = clampf(
 		zoom,
 		MatchSettings.MIN_CAMERA_ZOOM,
@@ -186,8 +196,8 @@ func apply_camera_settings(settings: MatchSettings) -> void:
 	if settings == null:
 		return
 	set_camera_pose(
-		settings.camera_azimuth,
-		settings.camera_elevation,
+		MatchSettings.DEFAULT_CAMERA_AZIMUTH,
+		MatchSettings.DEFAULT_CAMERA_ELEVATION,
 		settings.camera_zoom
 	)
 
@@ -255,26 +265,6 @@ func _on_viewport_size_changed() -> void:
 	fit_camera(_current_map_data)
 
 
-func _input(event: InputEvent) -> void:
-	if not visible:
-		return
-	if event is InputEventMouseButton:
-		var mouse_button := event as InputEventMouseButton
-		if mouse_button.button_index == MOUSE_BUTTON_RIGHT:
-			_orbit_dragging = mouse_button.pressed
-			if not _orbit_dragging:
-				_emit_adjustment_finished()
-			get_viewport().set_input_as_handled()
-	elif event is InputEventMouseMotion and _orbit_dragging:
-		var motion := event as InputEventMouseMotion
-		set_camera_pose(
-			_azimuth - motion.relative.x * ORBIT_SENSITIVITY_DEGREES,
-			_elevation + motion.relative.y * ORBIT_SENSITIVITY_DEGREES,
-			_zoom
-		)
-		get_viewport().set_input_as_handled()
-
-
 func _on_item_spawned(item: ArenaItemState) -> void:
 	add_item(item)
 
@@ -294,6 +284,10 @@ func _clear_item_views() -> void:
 		child.queue_free()
 
 
+func _on_actor_exiting(actor_id: int) -> void:
+	_actor_views.erase(actor_id)
+
+
 func _emit_pose_changed() -> void:
 	camera_pose_changed.emit(_azimuth, _elevation, _zoom)
 
@@ -304,13 +298,13 @@ func _emit_adjustment_finished() -> void:
 
 func _build_environment() -> void:
 	var environment_node := WorldEnvironment.new()
-	environment_node.name = "ClayWorldEnvironment"
+	environment_node.name = "ForestWorldEnvironment"
 	var environment := Environment.new()
 	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = Color("#4faed0")
+	environment.background_color = StorybookMaterialLibrary.SKY
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = ClayMaterialLibrary.CREAM
-	environment.ambient_light_energy = 0.13
+	environment.ambient_light_color = StorybookMaterialLibrary.PAPER
+	environment.ambient_light_energy = 0.22
 	environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	environment_node.environment = environment
 	add_child(environment_node)
@@ -320,7 +314,7 @@ func _build_environment() -> void:
 	sun.rotation_degrees = Vector3(-58.0, -32.0, 0.0)
 	sun.light_color = Color("#ffe2ba")
 	sun.light_energy = 0.92
-	sun.shadow_enabled = true
+	sun.shadow_enabled = false
 	sun.directional_shadow_max_distance = 26.0
 	add_child(sun)
 

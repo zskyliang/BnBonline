@@ -1,19 +1,21 @@
 class_name ExplosionView3D
 extends Node3D
-## Pooled three-stage clay-water burst for one logical explosion effect.
+## Pooled three-stage hand-painted foam burst for one logical explosion.
 
 signal release_requested(view: ExplosionView3D)
 
 const STOP_MOTION_STEP := 1.0 / 12.0
 const FLASH_END := 0.083
 const SPLASH_END := 0.25
-const DITHER_SHADER := preload("res://assets/materials/clay_dither_fade.gdshader")
+const DITHER_SHADER := preload("res://assets/materials/storybook_dither_fade.gdshader")
+const EFFECT_SHAPES_PATH := \
+	"res://assets/models/effects/storybook/effect_shapes.glb"
 
 static var _core_mesh: SphereMesh
 static var _cell_mesh: CapsuleMesh
-static var _foam_mesh: SphereMesh
-static var _drop_mesh: SphereMesh
-static var _spike_mesh: CylinderMesh
+static var _foam_mesh: Mesh
+static var _drop_mesh: Mesh
+static var _spike_mesh: Mesh
 
 var effect: ExplosionEffect
 var _core: MeshInstance3D
@@ -36,7 +38,7 @@ func activate(logic_effect: ExplosionEffect, droplet_count: int = 4) -> void:
 	_ensure_visuals()
 	_disconnect_effect()
 	effect = logic_effect
-	name = "ClayWaterExplosion"
+	name = "StorybookFoamExplosion"
 	_visual_accumulator = 0.0
 	_visual_elapsed = 0.0
 	_release_emitted = false
@@ -55,12 +57,18 @@ func _apply_effect_color() -> void:
 	if not is_instance_valid(effect):
 		return
 	var color: Color = PaintPalette.get_color(effect.color_id)
-	_core.material_override = ClayMaterialLibrary.make(color.lightened(0.42), 0.84, 0.28)
-	_splash_cells.material_override = ClayMaterialLibrary.make(color, 0.86, 0.16)
-	_splash_spikes.material_override = ClayMaterialLibrary.make(color.lightened(0.18), 0.86, 0.06)
+	_core.material_override = StorybookMaterialLibrary.make(
+		color.lightened(0.42), 0.84, false, 0.28
+	)
+	_splash_cells.material_override = StorybookMaterialLibrary.make(
+		color, 0.86, false, 0.16
+	)
+	_splash_spikes.material_override = StorybookMaterialLibrary.make(
+		color.lightened(0.18), 0.86, true, 0.06
+	)
 	_foam_material.set_shader_parameter("albedo_color", color.lightened(0.48))
 	for index: int in range(_droplets.size()):
-		_droplets[index].material_override = ClayMaterialLibrary.make(
+		_droplets[index].material_override = StorybookMaterialLibrary.make(
 			color.lightened(0.18 if index % 2 == 0 else 0.42),
 			0.88
 		)
@@ -124,17 +132,23 @@ func _ensure_visuals() -> void:
 	_core = MeshInstance3D.new()
 	_core.name = "CompressedCoreFlash"
 	_core.mesh = _core_mesh
-	_core.material_override = ClayMaterialLibrary.make(ClayMaterialLibrary.CREAM, 0.84, 0.28)
+	_core.material_override = StorybookMaterialLibrary.make(
+		StorybookMaterialLibrary.PAPER, 0.84, false, 0.28
+	)
 	add_child(_core)
 
 	_splash_cells = MultiMeshInstance3D.new()
-	_splash_cells.name = "ClayWaterSplashCells"
-	_splash_cells.material_override = ClayMaterialLibrary.make(Color("#38afd8"), 0.86, 0.16)
+	_splash_cells.name = "StorybookWaterSplashCells"
+	_splash_cells.material_override = StorybookMaterialLibrary.make(
+		Color("#38afd8"), 0.86, false, 0.16
+	)
 	add_child(_splash_cells)
 
 	_splash_spikes = MultiMeshInstance3D.new()
 	_splash_spikes.name = "HandPinchedRadialSplash"
-	_splash_spikes.material_override = ClayMaterialLibrary.make(Color("#67c6e1"), 0.86, 0.06)
+	_splash_spikes.material_override = StorybookMaterialLibrary.make(
+		Color("#67c6e1"), 0.86, true, 0.06
+	)
 	add_child(_splash_spikes)
 
 	_foam_cells = MultiMeshInstance3D.new()
@@ -144,20 +158,20 @@ func _ensure_visuals() -> void:
 	_foam_material.set_shader_parameter("albedo_color", Color("#e8f0df"))
 	_foam_material.set_shader_parameter(
 		"normal_texture",
-		load("res://assets/materials/clay_detail_normal.png") as Texture2D
+		load("res://assets/materials/storybook_paper_normal.png") as Texture2D
 	)
 	_foam_material.set_shader_parameter("roughness_value", 0.9)
 	_foam_cells.material_override = _foam_material
 	add_child(_foam_cells)
 
 	_droplet_root = Node3D.new()
-	_droplet_root.name = "ClayDroplets"
+	_droplet_root.name = "StorybookDroplets"
 	add_child(_droplet_root)
 	for index: int in range(4):
 		var droplet := MeshInstance3D.new()
 		droplet.mesh = _drop_mesh
-		droplet.material_override = ClayMaterialLibrary.make(
-			Color("#73cbe3") if index % 2 == 0 else ClayMaterialLibrary.CREAM,
+		droplet.material_override = StorybookMaterialLibrary.make(
+			Color("#73cbe3") if index % 2 == 0 else StorybookMaterialLibrary.PAPER,
 			0.88
 		)
 		_droplet_root.add_child(droplet)
@@ -291,6 +305,7 @@ func _request_release() -> void:
 
 
 static func _ensure_shared_meshes() -> void:
+	_load_storybook_effect_meshes()
 	if _core_mesh == null:
 		_core_mesh = SphereMesh.new()
 		_core_mesh.radius = 0.42
@@ -304,20 +319,42 @@ static func _ensure_shared_meshes() -> void:
 		_cell_mesh.radial_segments = 12
 		_cell_mesh.rings = 4
 	if _foam_mesh == null:
-		_foam_mesh = SphereMesh.new()
-		_foam_mesh.radius = 0.34
-		_foam_mesh.height = 0.62
-		_foam_mesh.radial_segments = 10
-		_foam_mesh.rings = 5
+		var foam_fallback := SphereMesh.new()
+		foam_fallback.radius = 0.34
+		foam_fallback.height = 0.62
+		foam_fallback.radial_segments = 10
+		foam_fallback.rings = 5
+		_foam_mesh = foam_fallback
 	if _drop_mesh == null:
-		_drop_mesh = SphereMesh.new()
-		_drop_mesh.radius = 0.13
-		_drop_mesh.height = 0.28
-		_drop_mesh.radial_segments = 8
-		_drop_mesh.rings = 4
+		var drop_fallback := SphereMesh.new()
+		drop_fallback.radius = 0.13
+		drop_fallback.height = 0.28
+		drop_fallback.radial_segments = 8
+		drop_fallback.rings = 4
+		_drop_mesh = drop_fallback
 	if _spike_mesh == null:
-		_spike_mesh = CylinderMesh.new()
-		_spike_mesh.top_radius = 0.025
-		_spike_mesh.bottom_radius = 0.13
-		_spike_mesh.height = 0.64
-		_spike_mesh.radial_segments = 7
+		var spike_fallback := CylinderMesh.new()
+		spike_fallback.top_radius = 0.025
+		spike_fallback.bottom_radius = 0.13
+		spike_fallback.height = 0.64
+		spike_fallback.radial_segments = 7
+		_spike_mesh = spike_fallback
+
+
+static func _load_storybook_effect_meshes() -> void:
+	if _foam_mesh != null and _drop_mesh != null and _spike_mesh != null:
+		return
+	var packed := load(EFFECT_SHAPES_PATH) as PackedScene
+	if packed == null:
+		return
+	var instance := packed.instantiate()
+	for node: Node in instance.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := node as MeshInstance3D
+		match mesh_instance.name:
+			"FoamPetal":
+				_foam_mesh = mesh_instance.mesh
+			"Droplet":
+				_drop_mesh = mesh_instance.mesh
+			"BurstSpike":
+				_spike_mesh = mesh_instance.mesh
+	instance.free()

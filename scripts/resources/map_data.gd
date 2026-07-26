@@ -10,7 +10,6 @@ var ground_cells: Array[PackedInt32Array] = []
 var barrier_cells: Array[PackedInt32Array] = []
 var player_spawn: Vector2i = Vector2i(1, 11)
 var camera_bounds: AABB = AABB(Vector3(-9.5, -1.0, -8.5), Vector3(19.0, 7.0, 17.0))
-var building_units: Array[BuildingPlacement] = []
 var decorations: Array[Dictionary] = []
 
 
@@ -21,7 +20,6 @@ func configure(
 		new_ground_cells: Array[PackedInt32Array],
 		new_barrier_cells: Array[PackedInt32Array],
 		new_player_spawn: Vector2i,
-		new_building_units: Array[BuildingPlacement] = [],
 		new_camera_bounds: AABB = AABB(Vector3(-9.5, -1.0, -8.5), Vector3(19.0, 7.0, 17.0)),
 		new_decorations: Array[Dictionary] = []
 	) -> MapData:
@@ -32,7 +30,6 @@ func configure(
 	ground_cells = new_ground_cells
 	barrier_cells = new_barrier_cells
 	player_spawn = new_player_spawn
-	building_units = new_building_units
 	camera_bounds = new_camera_bounds
 	decorations = new_decorations
 	return self

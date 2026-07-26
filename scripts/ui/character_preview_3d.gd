@@ -6,7 +6,7 @@ var color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
 var _model_root: Node3D
 var _animation_player: AnimationPlayer
 var _animation_accumulator := 0.0
-const STOP_MOTION_STEP := 1.0 / 12.0
+const STOP_MOTION_STEP := 1.0 / 8.0
 
 
 func setup(
@@ -19,10 +19,10 @@ func setup(
 	own_world_3d = true
 	transparent_bg = true
 	render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	msaa_3d = Viewport.MSAA_2X
+	msaa_3d = Viewport.MSAA_DISABLED if OS.has_feature("web") else Viewport.MSAA_2X
 
 	var world := Node3D.new()
-	world.name = "ClayPreviewWorld"
+	world.name = "StorybookPreviewWorld"
 	add_child(world)
 	var model_scene := definition.load_model_scene()
 	if model_scene != null:
@@ -45,9 +45,10 @@ func setup(
 	ground_mesh.radial_segments = 20
 	ground.mesh = ground_mesh
 	ground.position.y = -0.04
-	ground.material_override = ClayMaterialLibrary.make(
+	ground.material_override = StorybookMaterialLibrary.make(
 		PaintPalette.get_color(color_id).lightened(0.62),
-		0.94
+		0.94,
+		false
 	)
 	world.add_child(ground)
 
@@ -96,10 +97,10 @@ func set_color_id(new_color_id: String) -> void:
 func _apply_palette() -> void:
 	if not is_instance_valid(_model_root):
 		return
-	ClayMaterialLibrary.apply_character_palette(
+	StorybookMaterialLibrary.apply_character_palette(
 		_model_root,
 		PaintPalette.get_color(color_id),
-		definition.clothing_material_names
+		definition.team_tint_material_names
 	)
 
 
@@ -108,9 +109,9 @@ func _normalize_model(model: Node3D) -> void:
 	var horizontal := maxf(bounds.size.x, bounds.size.z)
 	if bounds.size.y <= 0.001 or horizontal <= 0.001:
 		return
-	var model_scale := minf(1.25 / (bounds.size.y * 0.9), 0.92 / (horizontal * 1.08))
-	model.scale = Vector3(1.08, 0.9, 1.08) * model_scale
-	model.position.y = -bounds.position.y * model_scale * 0.9
+	var model_scale := minf(1.3 / bounds.size.y, 1.05 / horizontal)
+	model.scale = Vector3.ONE * model_scale
+	model.position.y = -bounds.position.y * model_scale
 	model.rotation_degrees.y = definition.yaw_offset_degrees
 
 
@@ -171,7 +172,7 @@ func _add_placeholder(parent: Node3D) -> void:
 	mesh.height = 1.15
 	mesh_instance.mesh = mesh
 	mesh_instance.position.y = 0.58
-	mesh_instance.material_override = ClayMaterialLibrary.make(
+	mesh_instance.material_override = StorybookMaterialLibrary.make(
 		PaintPalette.get_color(color_id),
 		0.92
 	)

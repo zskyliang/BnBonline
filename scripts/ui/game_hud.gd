@@ -36,12 +36,8 @@ var _result_title: Label
 var _result_detail: Label
 var _stats_label: Label
 var _stage_label: Label
-var _hud_bubble_icon: ClayBubbleIcon
+var _hud_bubble_icon: StorybookBubbleIcon
 var _zoom_button: Button
-var _camera_azimuth_slider: HSlider
-var _camera_elevation_slider: HSlider
-var _camera_azimuth_label: Label
-var _camera_elevation_label: Label
 var _item_timer_label: Label
 var _item_bonus_label: Label
 var _pickup_toast: Label
@@ -53,12 +49,11 @@ var _character_buttons: Dictionary = {}
 var _character_previews: Dictionary = {}
 var _color_buttons: Dictionary = {}
 var _skill_buttons: Dictionary = {}
-var _selected_character_id: String = "builder"
+var _selected_character_id: String = "cat"
 var _selected_color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
 var _selected_skill_id: String = ""
 var _last_scores: Array[Dictionary] = []
 var _camera_zoom: float = MatchSettings.DEFAULT_CAMERA_ZOOM
-var _syncing_camera_controls: bool = false
 var _pickup_toast_until_ms: int = 0
 
 
@@ -142,18 +137,8 @@ func update_zoom(percent: int) -> void:
 		_zoom_button.text = "%d%%" % percent
 
 
-func update_camera_pose(azimuth: float, elevation: float, zoom: float) -> void:
+func update_camera_pose(_azimuth: float, _elevation: float, zoom: float) -> void:
 	_camera_zoom = zoom
-	_syncing_camera_controls = true
-	if is_instance_valid(_camera_azimuth_slider):
-		_camera_azimuth_slider.set_value_no_signal(azimuth)
-	if is_instance_valid(_camera_elevation_slider):
-		_camera_elevation_slider.set_value_no_signal(elevation)
-	_syncing_camera_controls = false
-	if is_instance_valid(_camera_azimuth_label):
-		_camera_azimuth_label.text = "%d°" % roundi(azimuth)
-	if is_instance_valid(_camera_elevation_label):
-		_camera_elevation_label.text = "%d°" % roundi(elevation)
 	update_zoom(roundi(zoom * 100.0))
 
 
@@ -285,31 +270,45 @@ func _build_lobby() -> void:
 	_lobby_page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(_lobby_page)
 	_add_background(_lobby_page, true)
-	var layout := VBoxContainer.new()
-	layout.set_anchors_preset(Control.PRESET_CENTER)
-	layout.position = Vector2(-300, -180)
-	layout.size = Vector2(600, 360)
-	layout.alignment = BoxContainer.ALIGNMENT_CENTER
-	layout.add_theme_constant_override("separation", 18)
-	_lobby_page.add_child(layout)
-	var seal := _make_label("软陶染色 · 无限闯关", 20, Color("#8b352e"))
+	var header_panel := PanelContainer.new()
+	header_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	header_panel.position = Vector2(-340, 18)
+	header_panel.size = Vector2(680, 154)
+	header_panel.add_theme_stylebox_override(
+		"panel",
+		_panel_style(Color(0.98, 0.93, 0.82, 0.91), Color("#8c6045"), 22, 2)
+	)
+	_lobby_page.add_child(header_panel)
+	var header := VBoxContainer.new()
+	header.alignment = BoxContainer.ALIGNMENT_CENTER
+	header.add_theme_constant_override("separation", 2)
+	header_panel.add_child(header)
+	var seal := _make_label("森林绘本 · 无限闯关", 20, Color("#6b4938"))
 	seal.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	layout.add_child(seal)
-	var title := _make_label("黏土泡泡染色战", 52, Color("#fff8e8"))
+	header.add_child(seal)
+	var title := _make_label("森林泡泡染色战", 46, Color("#7d3e36"))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_constant_override("outline_size", 8)
-	title.add_theme_color_override("font_outline_color", Color("#b24d42"))
-	layout.add_child(title)
+	title.add_theme_constant_override("outline_size", 3)
+	title.add_theme_color_override("font_outline_color", Color("#fff8e8"))
+	header.add_child(title)
 	var subtitle := _make_label("三分钟抢占地板，撞破敌方困泡永久锁定九宫格", 18, Color("#35585b"))
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	layout.add_child(subtitle)
+	header.add_child(subtitle)
+
+	var actions := VBoxContainer.new()
+	actions.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	actions.position = Vector2(-300, -142)
+	actions.size = Vector2(600, 124)
+	actions.alignment = BoxContainer.ALIGNMENT_END
+	actions.add_theme_constant_override("separation", 10)
+	_lobby_page.add_child(actions)
 	var start := _make_button("开始闯关", Color("#ef6b5b"), Vector2(280, 56))
 	start.pressed.connect(setup_requested.emit)
-	layout.add_child(start)
+	actions.add_child(start)
 	if not OS.has_feature("web"):
 		var quit := _make_button("退出", Color("#4d9d9a"), Vector2(200, 44))
 		quit.pressed.connect(quit_requested.emit)
-		layout.add_child(quit)
+		actions.add_child(quit)
 
 
 func _build_setup() -> void:
@@ -334,7 +333,7 @@ func _build_setup() -> void:
 	panel.add_child(page)
 	var header := HBoxContainer.new()
 	page.add_child(header)
-	var title := _make_label("选择角色与阵营颜色", 28, ClayMaterialLibrary.CHARCOAL)
+	var title := _make_label("选择角色与阵营颜色", 28, StorybookMaterialLibrary.CHARCOAL)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 	_selected_label = _make_label("", 17, Color("#317c78"))
@@ -366,7 +365,7 @@ func _build_setup() -> void:
 	var color_box := VBoxContainer.new()
 	color_box.add_theme_constant_override("separation", 8)
 	color_panel.add_child(color_box)
-	color_box.add_child(_make_label("服装与水泡颜色", 20, Color("#7d3e36")))
+	color_box.add_child(_make_label("局部队色与水泡颜色", 20, Color("#7d3e36")))
 	var palette_grid := GridContainer.new()
 	palette_grid.columns = 2
 	palette_grid.add_theme_constant_override("h_separation", 8)
@@ -408,18 +407,18 @@ func _build_match_hud() -> void:
 	top.offset_bottom = 68
 	top.add_theme_stylebox_override(
 		"panel",
-		_panel_style(Color(0.957, 0.906, 0.82, 0.78), ClayMaterialLibrary.TERRACOTTA, 18, 2)
+		_panel_style(Color(0.957, 0.906, 0.82, 0.78), StorybookMaterialLibrary.TERRACOTTA, 18, 2)
 	)
 	_match_page.add_child(top)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 	top.add_child(row)
-	_hud_bubble_icon = ClayBubbleIcon.new()
+	_hud_bubble_icon = StorybookBubbleIcon.new()
 	_hud_bubble_icon.custom_minimum_size = Vector2(34, 34)
 	row.add_child(_hud_bubble_icon)
 	_stage_label = _make_label("第 1 关", 16, Color("#9c4436"))
 	row.add_child(_stage_label)
-	_stats_label = _make_label("准备中", 15, ClayMaterialLibrary.CHARCOAL)
+	_stats_label = _make_label("准备中", 15, StorybookMaterialLibrary.CHARCOAL)
 	_stats_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(_stats_label)
 	timer_label = _make_label("03:00", 28, Color("#9c4436"))
@@ -442,7 +441,7 @@ func _build_match_hud() -> void:
 	scores_panel.size = Vector2(224, 152)
 	scores_panel.add_theme_stylebox_override(
 		"panel",
-		_panel_style(Color(0.957, 0.906, 0.82, 0.68), ClayMaterialLibrary.GRASS, 16, 2)
+		_panel_style(Color(0.957, 0.906, 0.82, 0.68), StorybookMaterialLibrary.GRASS, 16, 2)
 	)
 	_match_page.add_child(scores_panel)
 	var scores_content := VBoxContainer.new()
@@ -482,7 +481,7 @@ func _build_match_hud() -> void:
 	_pickup_toast.visible = false
 	_match_page.add_child(_pickup_toast)
 	var controls := _make_label(
-		"WASD/方向键 移动　空格 放泡　右键拖动镜头　滚轮缩放　0 复位　Esc 暂停",
+		"WASD/方向键 移动　空格 放泡　滚轮或 +/- 缩放　0 恢复 110%　Esc 暂停",
 		12,
 		Color("#fff8e7")
 	)
@@ -507,8 +506,8 @@ func _build_settings_overlay() -> void:
 	add_child(_settings_overlay)
 	var panel := PanelContainer.new()
 	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.position = Vector2(-270, -190)
-	panel.size = Vector2(540, 380)
+	panel.position = Vector2(-270, -150)
+	panel.size = Vector2(540, 300)
 	panel.add_theme_stylebox_override(
 		"panel",
 		_panel_style(Color("#fff6df"), Color("#5a9b98"), 22, 3)
@@ -522,14 +521,12 @@ func _build_settings_overlay() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(title)
 	var description := _make_label(
-		"镜头始终围绕地图中心；角色移动方向不随镜头旋转",
+		"固定正交镜头：方位角 -30°、俯角 42°",
 		14,
 		Color("#4b6767")
 	)
 	description.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(description)
-	content.add_child(_make_camera_slider_row(true))
-	content.add_child(_make_camera_slider_row(false))
 	var zoom_title := _make_label("镜头缩放", 14, Color("#5b5048"))
 	zoom_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(zoom_title)
@@ -549,12 +546,8 @@ func _build_settings_overlay() -> void:
 	zoom_in.name = "ZoomInButton"
 	zoom_in.pressed.connect(zoom_in_requested.emit)
 	zoom_row.add_child(zoom_in)
-	var reset_camera := _make_button("重置镜头", Color("#7f8f72"), Vector2(118, 36))
-	reset_camera.name = "CameraResetButton"
-	reset_camera.pressed.connect(camera_reset_requested.emit)
-	zoom_row.add_child(reset_camera)
 	var hint := _make_label(
-		"关闭设置后仍可右键拖动环绕、滚轮缩放，数字 0 恢复默认镜头",
+		"缩放范围 85%～135%；数字 0 恢复 110%",
 		13,
 		Color("#6e5b50")
 	)
@@ -565,56 +558,6 @@ func _build_settings_overlay() -> void:
 	close.pressed.connect(settings_close_requested.emit)
 	content.add_child(close)
 	_settings_overlay.visible = false
-
-
-func _make_camera_slider_row(is_azimuth: bool) -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 5)
-	var title := _make_label("水平" if is_azimuth else "俯视", 12, Color("#5b5048"))
-	title.custom_minimum_size.x = 34
-	row.add_child(title)
-	var slider := HSlider.new()
-	slider.custom_minimum_size = Vector2(154, 24)
-	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slider.step = 1.0
-	if is_azimuth:
-		slider.min_value = MatchSettings.MIN_CAMERA_AZIMUTH
-		slider.max_value = MatchSettings.MAX_CAMERA_AZIMUTH
-		slider.value = MatchSettings.DEFAULT_CAMERA_AZIMUTH
-		_camera_azimuth_slider = slider
-	else:
-		slider.min_value = MatchSettings.MIN_CAMERA_ELEVATION
-		slider.max_value = MatchSettings.MAX_CAMERA_ELEVATION
-		slider.value = MatchSettings.DEFAULT_CAMERA_ELEVATION
-		_camera_elevation_slider = slider
-	slider.value_changed.connect(_on_camera_slider_changed)
-	slider.drag_ended.connect(_on_camera_slider_drag_ended)
-	row.add_child(slider)
-	var value_label := _make_label("", 12, Color("#317c78"))
-	value_label.custom_minimum_size.x = 36
-	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	if is_azimuth:
-		_camera_azimuth_label = value_label
-	else:
-		_camera_elevation_label = value_label
-	row.add_child(value_label)
-	return row
-
-
-func _on_camera_slider_changed(_value: float) -> void:
-	if _syncing_camera_controls \
-			or not is_instance_valid(_camera_azimuth_slider) \
-			or not is_instance_valid(_camera_elevation_slider):
-		return
-	camera_pose_requested.emit(
-		float(_camera_azimuth_slider.value),
-		float(_camera_elevation_slider.value),
-		_camera_zoom
-	)
-
-
-func _on_camera_slider_drag_ended(_value_changed: bool) -> void:
-	camera_adjustment_finished.emit()
 
 
 func _build_pause_overlay() -> void:
@@ -837,7 +780,7 @@ func _fill_score_box(box: VBoxContainer, entries: Array[Dictionary]) -> void:
 				entry.get("locked", 0),
 			],
 			14,
-			ClayMaterialLibrary.CHARCOAL
+			StorybookMaterialLibrary.CHARCOAL
 		)
 		row.add_child(label)
 
@@ -849,11 +792,11 @@ func _add_background(parent: Control, use_art: bool) -> void:
 		viewport_container.stretch = true
 		viewport_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		parent.add_child(viewport_container)
-		var diorama := ClayLobbyDiorama3D.new()
+		var diorama := StorybookLobbyDiorama3D.new()
 		viewport_container.add_child(diorama)
 	var tint := ColorRect.new()
 	tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	tint.color = Color(0.96, 0.9, 0.78, 0.08) if use_art else ClayMaterialLibrary.SKY
+	tint.color = Color(0.96, 0.9, 0.78, 0.08) if use_art else StorybookMaterialLibrary.SKY
 	tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(tint)
 

@@ -50,8 +50,7 @@ static func _build_paint_arena() -> MapData:
 		_make_matrix(1),
 		_make_matrix(0),
 		PLAYER_SPAWN,
-		[],
-		AABB(Vector3(-7.75, -1.0, -6.75), Vector3(15.5, 3.5, 13.5)),
+		AABB(Vector3(-8.5, -0.4, -7.5), Vector3(17.0, 3.4, 15.0)),
 		[]
 	)
 

@@ -1,6 +1,6 @@
 [application]
 
-config/name="BnBonline Godot"
+config/name="森林泡泡染色战"
 run/main_scene="res://scenes/main.tscn"
 run/max_fps=60
 
