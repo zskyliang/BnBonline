@@ -1,35 +1,41 @@
 extends SceneTree
-## Import, animation, and budget contract for every original Blender MCP asset.
+## Import and transparency contract for every ImageGen Sprite3D runtime asset.
 
-const REQUIRED_ACTIONS: Array[String] = [
-	"Idle",
-	"Waddle",
-	"PlaceBubble",
-	"Trapped",
-	"Defeat",
-	"Victory",
+const SHARED_TEXTURE_PATHS: Array[String] = [
+	"res://assets/art/storybook25d/environment/grass.png",
+	"res://assets/art/storybook25d/environment/floor_tile_atlas.png",
+	"res://assets/art/storybook25d/environment/wood_rail.png",
+	"res://assets/art/storybook25d/environment/wood_corner.png",
+	"res://assets/art/storybook25d/environment/conifer.png",
+	"res://assets/art/storybook25d/environment/bush.png",
+	"res://assets/art/storybook25d/environment/mushrooms.png",
+	"res://assets/art/storybook25d/environment/stump.png",
+	"res://assets/art/storybook25d/environment/wood_sign.png",
+	"res://assets/art/storybook25d/environment/rocks.png",
+	"res://assets/art/storybook25d/environment/flowers.png",
+	"res://assets/art/storybook25d/items/leaf_shoes.png",
+	"res://assets/art/storybook25d/items/bubble_gourd.png",
+	"res://assets/art/storybook25d/items/paw_burst.png",
+	"res://assets/art/storybook25d/effects/bubble_bomb.png",
+	"res://assets/art/storybook25d/effects/trap_bubble.png",
+	"res://assets/art/storybook25d/effects/pop_core.png",
+	"res://assets/art/storybook25d/effects/cross_splash.png",
+	"res://assets/art/storybook25d/effects/foam_burst.png",
+	"res://assets/art/storybook25d/lobby/storybook_lobby.png",
+	"res://assets/art/storybook25d/ui/paper_panel.png",
+	"res://assets/art/storybook25d/ui/button_normal.png",
+	"res://assets/art/storybook25d/ui/button_normal_wide.png",
+	"res://assets/art/storybook25d/ui/button_hover.png",
+	"res://assets/art/storybook25d/ui/button_hover_wide.png",
+	"res://assets/art/storybook25d/ui/button_pressed.png",
+	"res://assets/art/storybook25d/ui/button_pressed_wide.png",
 ]
-const CHARACTER_IDS: Array[String] = [
-	"cat",
-	"dog",
-	"rabbit",
-	"bear",
-	"fox",
-	"raccoon",
-	"penguin",
-	"capybara",
-]
-const PROP_PATHS: Array[String] = [
-	"res://assets/models/items/storybook/leaf_shoes.glb",
-	"res://assets/models/items/storybook/bubble_gourd.glb",
-	"res://assets/models/items/storybook/paw_burst.glb",
-]
-const WORLD_PATHS: Array[String] = [
-	"res://assets/models/effects/storybook/bubble_bomb.glb",
-	"res://assets/models/effects/storybook/effect_shapes.glb",
-	"res://assets/models/environment/storybook/storybook_floor_tile.glb",
-	"res://assets/models/environment/storybook/forest_board_decor.glb",
-	"res://assets/models/environment/storybook/storybook_lobby.glb",
+const WIND_PLANTS: Array[String] = [
+	"conifer",
+	"bush",
+	"mushrooms",
+	"flowers",
+	"lavender",
 ]
 
 var _checks: int = 0
@@ -41,188 +47,285 @@ func _initialize() -> void:
 
 
 func _run() -> void:
-	for character_id: String in CHARACTER_IDS:
-		await _validate_character(character_id)
-	for prop_path: String in PROP_PATHS:
-		await _validate_static_asset(prop_path, 2000)
-	for world_path: String in WORLD_PATHS:
-		await _validate_static_asset(world_path, 2500)
-	print("Forest storybook GLBs: %d checks, %d failures" % [_checks, _failures])
+	for character_id: String in CharacterCatalog.IDS:
+		_validate_character(character_id)
+		_validate_character_bubble(character_id)
+	for plant_id: String in WIND_PLANTS:
+		_validate_wind_plant(plant_id)
+	for texture_path: String in SHARED_TEXTURE_PATHS:
+		_validate_shared_texture(texture_path)
+	_check(
+		not _directory_contains_extension("res://assets", "glb"),
+		"runtime assets contain no residual GLB files"
+	)
+	print("Forest ImageGen sprites: %d checks, %d failures" % [_checks, _failures])
 	quit(1 if _failures > 0 else 0)
 
 
 func _validate_character(character_id: String) -> void:
-	var path := "res://assets/models/characters/%s.glb" % character_id
-	var packed := load(path) as PackedScene
-	_check(packed != null, "%s GLB imports as PackedScene" % character_id)
-	if packed == null:
-		return
-	var instance := packed.instantiate() as Node3D
-	_check(instance != null, "%s GLB instantiates as Node3D" % character_id)
-	if instance == null:
-		return
-	root.add_child(instance)
-	await process_frame
-
-	var bounds := _calculate_bounds(instance)
+	var definition := CharacterCatalog.get_definition(character_id)
+	var sprite_set := definition.load_sprite_set()
+	_check(sprite_set != null, "%s exposes a CharacterSpriteSet" % character_id)
 	_check(
-		bounds.size.y >= 1.20 and bounds.size.y <= 1.40,
-		"%s raw height stays near 1.3 Godot units" % character_id
+		definition.sprite_set_path.ends_with("/%s" % character_id),
+		"%s points to its approved ImageGen identity set" % character_id
+	)
+	if sprite_set == null:
+		return
+	_check(
+		CharacterSpriteSet.ACTIONS == [
+			&"Idle",
+			&"WalkUp",
+			&"WalkDown",
+			&"WalkLeft",
+			&"WalkRight",
+			&"Trapped",
+		],
+		"%s exposes exactly the approved six logical actions" % character_id
+	)
+	var pose_count := 0
+	for direction: StringName in CharacterSpriteSet.DIRECTIONS:
+		_validate_pose(
+			character_id,
+			"Idle/%s" % direction,
+			sprite_set.texture_for(&"Idle", 0, direction),
+			sprite_set.mask_for(&"Idle", 0, direction)
+		)
+		pose_count += 1
+	for action: StringName in CharacterSpriteSet.WALK_ACTIONS:
+		for frame_index: int in range(CharacterSpriteSet.WALK_FRAME_COUNT):
+			_validate_pose(
+				character_id,
+				"%s/%d" % [action, frame_index],
+				sprite_set.texture_for(action, frame_index),
+				sprite_set.mask_for(action, frame_index)
+			)
+			pose_count += 1
+	_validate_pose(
+		character_id,
+		"Trapped",
+		sprite_set.texture_for(&"Trapped"),
+		sprite_set.mask_for(&"Trapped")
+	)
+	pose_count += 1
+	_check(
+		pose_count == 21,
+		"%s contains exactly 21 directional poses" % character_id
 	)
 	_check(
-		absf(bounds.position.y) <= 0.04,
-		"%s origin is centered at the grounded feet" % character_id
+		sprite_set.texture_path_for(&"WalkLeft", 0) \
+			!= sprite_set.texture_path_for(&"WalkRight", 0),
+		"%s left and right use independent source frames" % character_id
 	)
-
-	var skeleton := _find_first(instance, "Skeleton3D") as Skeleton3D
-	_check(skeleton != null, "%s imports a Skeleton3D" % character_id)
-	if skeleton != null:
+	for legacy_stem: String in [
+		"idle",
+		"waddle",
+		"waddle_body",
+		"waddle_left_arm",
+		"waddle_right_arm",
+		"waddle_left_foot",
+		"waddle_right_foot",
+		"place_bubble",
+		"defeat",
+		"victory",
+	]:
 		_check(
-			skeleton.get_bone_count() > 0 and skeleton.get_bone_count() <= 32,
-			"%s stays within the 32-bone budget" % character_id
+			not FileAccess.file_exists(
+				"res://assets/art/storybook25d/characters/%s/%s.png"
+					% [character_id, legacy_stem]
+			),
+			"%s has no legacy %s runtime artwork" % [character_id, legacy_stem]
 		)
 
-	var animation_player := _find_first(instance, "AnimationPlayer") as AnimationPlayer
-	_check(animation_player != null, "%s imports an AnimationPlayer" % character_id)
-	if animation_player != null:
-		var imported_names: Array[String] = []
-		for animation_name: StringName in animation_player.get_animation_list():
-			imported_names.append(String(animation_name))
-		for required_action: String in REQUIRED_ACTIONS:
-			var matched := false
-			for imported_name: String in imported_names:
-				matched = matched or imported_name.ends_with(required_action) \
-					or imported_name.contains(required_action)
-			_check(matched, "%s imports %s" % [character_id, required_action])
-		_validate_waddle(character_id, animation_player)
 
-	var material_names: Dictionary = {}
-	var triangle_count := 0
-	for node: Node in instance.find_children("*", "MeshInstance3D", true, false):
-		var mesh_instance := node as MeshInstance3D
-		if mesh_instance.mesh == null:
+func _validate_character_bubble(character_id: String) -> void:
+	var root_path := (
+		"res://assets/art/storybook25d/effects/character_bubbles/"
+		+ character_id
+	)
+	var texture := load(root_path + ".png") as Texture2D
+	var mask := load(root_path + "_mask.png") as Texture2D
+	_check(texture != null, "%s has one exclusive ImageGen bubble" % character_id)
+	_check(mask != null, "%s bubble has a local team-color mask" % character_id)
+	if texture == null or mask == null:
+		return
+	var image := texture.get_image()
+	var mask_image := mask.get_image()
+	_check(
+		image.get_size() == Vector2i(512, 512),
+		"%s bubble uses the shared 512px canvas" % character_id
+	)
+	_check(
+		_corners_are_transparent(image),
+		"%s bubble has halo-free transparent corners" % character_id
+	)
+	_check(
+		_mask_has_tint_pixels(mask_image),
+		"%s bubble exposes a broad replaceable team-color wash" % character_id
+	)
+	var opaque_rect := _opaque_rect(image)
+	_check(
+		float(opaque_rect.size.x) * BubbleView3D.BUBBLE_PIXEL_SIZE >= 0.8,
+		"%s bubble occupies at least four fifths of one board cell" % character_id
+	)
+	_check(
+		opaque_rect.end.y >= 492,
+		"%s bubble shares the grounded visual baseline" % character_id
+	)
+
+
+func _validate_wind_plant(plant_id: String) -> void:
+	var reference := load(
+		"res://assets/art/storybook25d/environment/%s.png" % plant_id
+	) as Texture2D
+	_check(reference != null, "%s keeps its approved identity texture" % plant_id)
+	if reference == null:
+		return
+	var first_data := PackedByteArray()
+	for frame_index: int in range(4):
+		var frame := load(
+			"res://assets/art/storybook25d/environment/wind/%s_%d.png"
+				% [plant_id, frame_index]
+		) as Texture2D
+		_check(
+			frame != null,
+			"%s wind frame %d imports" % [plant_id, frame_index]
+		)
+		if frame == null:
 			continue
-		triangle_count += mesh_instance.mesh.get_faces().size() / 3
-		for surface: int in range(mesh_instance.mesh.get_surface_count()):
-			var material := mesh_instance.mesh.surface_get_material(surface)
-			if material != null:
-				material_names[material.resource_name] = true
-	_check(triangle_count <= 8000, "%s stays within the 8k triangle budget" % character_id)
-	_check(
-		material_names.has("TeamTint") and material_names.has("FootRing"),
-		"%s exposes only the declared local team-tint slots" % character_id
-	)
-	_check(
-		material_names.has("Eyes") \
-			and material_names.has("Belly") \
-			and material_names.has("Muzzle"),
-		"%s keeps eyes, belly, and muzzle in fixed material slots" % character_id
-	)
+		var image := frame.get_image()
+		_check(
+			image.get_size() == Vector2i(
+				reference.get_width(),
+				reference.get_height()
+			),
+			"%s wind frame %d preserves runtime scale"
+				% [plant_id, frame_index]
+		)
+		_check(
+			_corners_are_transparent(image),
+			"%s wind frame %d has clean cutout corners"
+				% [plant_id, frame_index]
+		)
+		_check(
+			_opaque_rect(image).end.y >= image.get_height() - 4,
+			"%s wind frame %d keeps the root baseline planted"
+				% [plant_id, frame_index]
+		)
+		if frame_index == 0:
+			first_data = image.get_data()
+		else:
+			_check(
+				image.get_data() != first_data,
+				"%s wind frame %d is independently redrawn"
+					% [plant_id, frame_index]
+			)
 
-	instance.queue_free()
-	await process_frame
 
-
-func _validate_waddle(character_id: String, player: AnimationPlayer) -> void:
-	var waddle: Animation
-	for animation_name: StringName in player.get_animation_list():
-		if String(animation_name).contains("Waddle"):
-			waddle = player.get_animation(animation_name)
-			break
-	_check(waddle != null, "%s exposes its Waddle clip for gait inspection" % character_id)
-	if waddle == null:
+func _validate_pose(
+		character_id: String,
+		pose_name: String,
+		texture: Texture2D,
+		mask: Texture2D
+	) -> void:
+	_check(texture != null, "%s loads %s artwork" % [character_id, pose_name])
+	_check(mask != null, "%s loads %s team mask" % [character_id, pose_name])
+	if texture == null or mask == null:
 		return
-	var arm_spread := false
-	var leg_positions: Array[Vector3] = []
-	var root_positions: Array[Vector3] = []
-	for track_index: int in range(waddle.get_track_count()):
-		var path := String(waddle.track_get_path(track_index))
-		for key_index: int in range(waddle.track_get_key_count(track_index)):
-			var value: Variant = waddle.track_get_key_value(track_index, key_index)
-			if ("Arm.L" in path or "Arm.R" in path) and value is Quaternion:
-				arm_spread = arm_spread or absf((value as Quaternion).get_euler().z) >= 0.65
-			if ("Leg.L" in path or "Leg.R" in path) and value is Vector3:
-				leg_positions.append(value as Vector3)
-			if "Root" in path and value is Vector3:
-				root_positions.append(value as Vector3)
-	_check(arm_spread, "%s Waddle keeps both arms in a broad toddler balance pose" % character_id)
+	var image := texture.get_image()
+	var mask_image := mask.get_image()
 	_check(
-		_max_vector_separation(leg_positions) >= 0.05,
-		"%s Waddle visibly alternates lifted and planted feet" % character_id
+		image.get_size() == Vector2i(512, 512),
+		"%s %s is normalized to 512x512" % [character_id, pose_name]
 	)
 	_check(
-		_max_vector_separation(root_positions) >= 0.06,
-		"%s Waddle shifts the body weight instead of sliding rigidly" % character_id
+		image.get_size() == mask_image.get_size(),
+		"%s %s base and mask share one anchor" % [character_id, pose_name]
+	)
+	_check(
+		_corners_are_transparent(image),
+		"%s %s has transparent halo-free corners" % [character_id, pose_name]
+	)
+	_check(
+		_mask_has_tint_pixels(mask_image),
+		"%s %s contains only local team-color pixels" % [character_id, pose_name]
+	)
+	var opaque_rect := _opaque_rect(image)
+	_check(
+		opaque_rect.has_area() and opaque_rect.end.y >= 480,
+		"%s %s feet stay on the shared baseline" % [character_id, pose_name]
 	)
 
 
-func _validate_static_asset(path: String, triangle_budget: int) -> void:
-	var packed := load(path) as PackedScene
-	_check(packed != null, "%s imports as PackedScene" % path.get_file())
-	if packed == null:
+func _validate_shared_texture(path: String) -> void:
+	var texture := load(path) as Texture2D
+	_check(texture != null, "%s imports as a runtime Texture2D" % path.get_file())
+	if texture == null:
 		return
-	var instance := packed.instantiate() as Node3D
-	_check(instance != null, "%s instantiates as Node3D" % path.get_file())
-	if instance == null:
-		return
-	root.add_child(instance)
-	await process_frame
 	_check(
-		_triangle_count(instance) <= triangle_budget,
-		"%s stays within its runtime triangle budget" % path.get_file()
+		texture.get_width() <= 2048 and texture.get_height() <= 2048,
+		"%s stays within the 2048px scene-art budget" % path.get_file()
 	)
-	instance.queue_free()
-	await process_frame
 
 
-func _triangle_count(root_node: Node) -> int:
-	var triangle_count := 0
-	for node: Node in root_node.find_children("*", "MeshInstance3D", true, false):
-		var mesh_instance := node as MeshInstance3D
-		if mesh_instance.mesh != null:
-			triangle_count += mesh_instance.mesh.get_faces().size() / 3
-	return triangle_count
+func _corners_are_transparent(image: Image) -> bool:
+	if image.is_empty():
+		return false
+	var maximum_x := image.get_width() - 1
+	var maximum_y := image.get_height() - 1
+	for point: Vector2i in [
+		Vector2i.ZERO,
+		Vector2i(maximum_x, 0),
+		Vector2i(0, maximum_y),
+		Vector2i(maximum_x, maximum_y),
+	]:
+		if image.get_pixelv(point).a > 0.03:
+			return false
+	return true
 
 
-func _max_vector_separation(values: Array[Vector3]) -> float:
-	var maximum := 0.0
-	for left_index: int in range(values.size()):
-		for right_index: int in range(left_index + 1, values.size()):
-			maximum = maxf(maximum, values[left_index].distance_to(values[right_index]))
-	return maximum
+func _mask_has_tint_pixels(image: Image) -> bool:
+	for y: int in range(0, image.get_height(), 4):
+		for x: int in range(0, image.get_width(), 4):
+			var pixel := image.get_pixel(x, y)
+			if pixel.a > 0.1 and pixel.r > 0.2:
+				return true
+	return false
 
 
-func _find_first(root_node: Node, type_name: String) -> Node:
-	if root_node.is_class(type_name):
-		return root_node
-	for child: Node in root_node.get_children():
-		var found := _find_first(child, type_name)
-		if found != null:
-			return found
-	return null
+func _opaque_rect(image: Image) -> Rect2i:
+	var minimum := Vector2i(image.get_width(), image.get_height())
+	var maximum := Vector2i(-1, -1)
+	for y: int in range(image.get_height()):
+		for x: int in range(image.get_width()):
+			if image.get_pixel(x, y).a <= 0.03:
+				continue
+			minimum = minimum.min(Vector2i(x, y))
+			maximum = maximum.max(Vector2i(x, y))
+	if maximum.x < minimum.x:
+		return Rect2i()
+	return Rect2i(minimum, maximum - minimum + Vector2i.ONE)
 
 
-func _calculate_bounds(root_node: Node3D) -> AABB:
-	var minimum := Vector3(INF, INF, INF)
-	var maximum := Vector3(-INF, -INF, -INF)
-	var found := false
-	var root_inverse := root_node.global_transform.affine_inverse()
-	for node: Node in root_node.find_children("*", "MeshInstance3D", true, false):
-		var mesh_instance := node as MeshInstance3D
-		if mesh_instance.mesh == null:
-			continue
-		var box := mesh_instance.get_aabb()
-		var relative := root_inverse * mesh_instance.global_transform
-		for x: float in [box.position.x, box.end.x]:
-			for y: float in [box.position.y, box.end.y]:
-				for z: float in [box.position.z, box.end.z]:
-					var point := relative * Vector3(x, y, z)
-					minimum = minimum.min(point)
-					maximum = maximum.max(point)
-					found = true
-	if not found:
-		return AABB(Vector3.ZERO, Vector3.ZERO)
-	return AABB(minimum, maximum - minimum)
+func _directory_contains_extension(path: String, extension: String) -> bool:
+	var directory := DirAccess.open(path)
+	if directory == null:
+		return false
+	directory.list_dir_begin()
+	var entry := directory.get_next()
+	while not entry.is_empty():
+		var child_path := path.path_join(entry)
+		if directory.current_is_dir():
+			if not entry.begins_with(".") \
+					and _directory_contains_extension(child_path, extension):
+				directory.list_dir_end()
+				return true
+		elif entry.get_extension().to_lower() == extension.to_lower():
+			directory.list_dir_end()
+			return true
+		entry = directory.get_next()
+	directory.list_dir_end()
+	return false
 
 
 func _check(condition: bool, description: String) -> void:
@@ -230,4 +333,4 @@ func _check(condition: bool, description: String) -> void:
 	if condition:
 		return
 	_failures += 1
-	push_error("STORYBOOK ASSET FAILED: %s" % description)
+	push_error("STORYBOOK SPRITE ASSET FAILED: %s" % description)

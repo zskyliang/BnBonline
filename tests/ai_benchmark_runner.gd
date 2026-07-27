@@ -215,6 +215,33 @@ func _run() -> void:
 	])
 	_check(item_average_usec < AVERAGE_GATE_USEC, "average item decision stays below 5 ms")
 	_check(item_p95_usec < P95_GATE_USEC, "P95 item decision stays below 10 ms")
+	_reset_neutral_paint(match_node.board)
+	var player := match_node.get_player()
+	player.respawn(Vector2i(7, 6))
+	player.stats.invincible_until_ms = 0
+	ai_actor.respawn(Vector2i(5, 6))
+	ai_actor.stats.invincible_until_ms = 0
+	player.trap(ai_actor)
+	controller.reset_for_scenario(20260727)
+	controller.reconsider_now()
+	_check(
+		controller.current_mode == RuleAI.Mode.INTERACTING \
+			and controller.decision_target == player.current_cell(),
+		"trapped player preempts live items and paint as the AI's top target"
+	)
+	for chase_frame: int in range(180):
+		await physics_frame
+		if player.stats.is_dead:
+			break
+	_check(
+		player.stats.is_dead and player.was_finished_by_enemy_touch,
+		"AI reaches and touches the trapped player before the ten-second release"
+	)
+	var trapped_defeat_counts := match_node.board.get_territory_counts()
+	_check(
+		int(trapped_defeat_counts["ai_locked"]) == 9,
+		"AI trapped-player finish permanently earns the full nine-cell area"
+	)
 	match_node.call("_enter_lobby")
 	match_node.queue_free()
 	await process_frame

@@ -17,6 +17,9 @@ func _capture() -> void:
 	var match_node := packed.instantiate() as MatchController
 	root.add_child(match_node)
 	await process_frame
+	if options.has("language"):
+		match_node.call("_on_language_changed", str(options["language"]))
+		await process_frame
 	var state := str(options.get("state", "lobby"))
 	if state == "setup":
 		match_node.call("_enter_setup")
@@ -39,7 +42,15 @@ func _capture() -> void:
 		]:
 			match_node.run_progress.advance_with_skill(skill_id, match_node._rng)
 		match_node.start_match()
-		if state in ["match-roster", "match-waddle", "match-trapped"]:
+		if state in [
+			"match-roster",
+			"match-walk-up",
+			"match-walk-down",
+			"match-walk-left",
+			"match-walk-right",
+			"match-walk-mixed",
+			"match-trapped",
+		]:
 			var roster_cells: Dictionary = {
 				"cat": Vector2i(6, 6),
 				"bear": Vector2i(8, 6),
@@ -47,16 +58,19 @@ func _capture() -> void:
 				"rabbit": Vector2i(13, 1),
 				"fox": Vector2i(13, 11),
 			}
+			roster_cells[match_node.settings.character_id] = Vector2i(6, 6)
 			for actor: GameActor in match_node.get_actors():
 				if roster_cells.has(actor.character_id):
 					actor.position = GameConstants.grid_to_world(
 						roster_cells[actor.character_id] as Vector2i
 					)
-					actor.velocity = (
-						Vector2.RIGHT * actor.stats.move_speed
-						if state == "match-waddle"
-						else Vector2.ZERO
+					actor.velocity = _snapshot_velocity(
+						state,
+						actor.character_id,
+						actor.stats.move_speed
 					)
+					if actor.velocity.length_squared() > 0.0:
+						actor.call("_update_facing", actor.velocity)
 			if state == "match-trapped":
 				var victim: GameActor = match_node.get_player()
 				victim.stats.is_trapped = true
@@ -92,8 +106,53 @@ func _capture() -> void:
 						Vector2i(4 + item_type * 3, 3 + row * 3),
 						10000 + row * 100 + item_type
 					)
+		if state == "match-bubbles":
+			var bubble_cells: Array[Vector2i] = [
+				Vector2i(3, 3),
+				Vector2i(6, 3),
+				Vector2i(9, 3),
+				Vector2i(12, 3),
+				Vector2i(3, 9),
+				Vector2i(6, 9),
+				Vector2i(9, 9),
+				Vector2i(12, 9),
+			]
+			var bubble_colors: Array[String] = [
+				"red", "orange", "yellow", "green",
+				"cyan", "blue", "purple", "red",
+			]
+			for character_index: int in range(CharacterCatalog.IDS.size()):
+				var owner := GameActor.new()
+				match_node._entity_root.add_child(owner)
+				owner.setup(
+					"BubbleOwner%d" % character_index,
+					PaintPalette.TEAM_PLAYER,
+					false,
+					match_node.board,
+					match_node.settings,
+					bubble_cells[character_index],
+					bubble_colors[character_index]
+				)
+				owner.character_id = CharacterCatalog.IDS[character_index]
+				owner.visible = false
+				var bubble := GameBubble.new()
+				match_node._entity_root.add_child(bubble)
+				bubble.setup(
+					owner,
+					bubble_cells[character_index],
+					30.0,
+					[owner]
+				)
+				match_node._arena_view.add_bubble(bubble)
+			match_node._is_paused = true
+			match_node.get_tree().paused = true
 		if state == "match-settings":
 			match_node.call("_open_settings")
+		if state == "match-rain":
+			match_node._arena_view.set_weather(
+				ForestWeatherSystem3D.Weather.RAIN,
+				true
+			)
 		if state == "match-explosion":
 			for center: Vector2i in [
 				Vector2i(4, 9),
@@ -122,17 +181,31 @@ func _capture() -> void:
 			match_node.call("_end_round")
 	var default_warmup := "80" if state in [
 		"match-roster",
-		"match-waddle",
+		"match-walk-up",
+		"match-walk-down",
+		"match-walk-left",
+		"match-walk-right",
+		"match-walk-mixed",
 		"match-trapped",
+		"match-bubbles",
+		"match-rain",
 	] else "18"
 	var warmup_frames := int(options.get("warmup", default_warmup))
 	for frame_index: int in range(warmup_frames):
-		if state == "match-waddle":
+		if state.begins_with("match-walk"):
 			for actor: GameActor in match_node.get_actors():
-				if frame_index == warmup_frames / 2:
-					actor.velocity *= -1.0
 				actor.position += actor.velocity / 60.0
 		await process_frame
+	if state == "match-rain":
+		for ripple_cell: Vector2i in [
+			Vector2i(2, 2),
+			Vector2i(5, 4),
+			Vector2i(7, 6),
+			Vector2i(10, 8),
+			Vector2i(12, 10),
+		]:
+			match_node._arena_view.weather_system.debug_spawn_ripple(ripple_cell)
+		match_node._arena_view.weather_system.call("_process", 0.12)
 	var image := root.get_texture().get_image()
 	var output_path := str(options.get("output", "/tmp/forest-bubble-%s.png" % state))
 	var error := image.save_png(output_path)
@@ -143,9 +216,36 @@ func _capture() -> void:
 	print("Saved visual snapshot: %s (%dx%d)" % [output_path, image.get_width(), image.get_height()])
 	paused = false
 	match_node.queue_free()
-	await process_frame
-	await process_frame
+	for cleanup_frame: int in range(8):
+		await process_frame
 	quit()
+
+
+func _snapshot_velocity(
+		state: String,
+		character_id: String,
+		speed: float
+	) -> Vector2:
+	var direction := Vector2.ZERO
+	match state:
+		"match-walk-up":
+			direction = Vector2.UP
+		"match-walk-down":
+			direction = Vector2.DOWN
+		"match-walk-left":
+			direction = Vector2.LEFT
+		"match-walk-right":
+			direction = Vector2.RIGHT
+		"match-walk-mixed":
+			var directions: Dictionary = {
+				"cat": Vector2.UP,
+				"bear": Vector2.DOWN,
+				"dog": Vector2.LEFT,
+				"rabbit": Vector2.RIGHT,
+				"fox": Vector2.UP,
+			}
+			direction = directions.get(character_id, Vector2.DOWN) as Vector2
+	return direction * speed
 
 
 func _parse_options(arguments: PackedStringArray) -> Dictionary:

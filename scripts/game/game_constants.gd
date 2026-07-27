@@ -8,19 +8,49 @@ const CELL_SIZE: float = 40.0
 const GRID_ORIGIN: Vector2 = Vector2(20.0, 40.0)
 const GAME_VIEW_SIZE: Vector2 = Vector2(800.0, 600.0)
 
+const BASE_MOVE_SPEED: float = 100.0
+const SPEED_PER_POINT: float = 25.0
+const DEFAULT_INITIAL_SPEED_POINTS: int = 2
+const DEFAULT_INITIAL_BUBBLE_POINTS: int = 2
+const DEFAULT_INITIAL_POWER_POINTS: int = 2
 const INITIAL_SPEED: float = 150.0
 const INITIAL_BUBBLES: int = 2
 const INITIAL_POWER: int = 2
-const SPEED_PER_SKILL_POINT: float = 10.0
-const SPEED_PER_STAGE_ITEM: float = 25.0
+const MAX_SPEED: float = 300.0
+const MAX_SPEED_POINTS: int = 8
+const MAX_BUBBLES: int = 10
+const MAX_POWER: int = 10
+const SPEED_PER_SKILL_POINT: float = SPEED_PER_POINT
+const SPEED_PER_STAGE_ITEM: float = SPEED_PER_POINT
+const MAX_SPEED_SKILL_POINTS: int = 7
+const MAX_BUBBLE_SKILL_POINTS: int = 9
+const MAX_POWER_SKILL_POINTS: int = 9
 const ITEM_SPAWN_INTERVAL_SECONDS: float = 10.0
+const ITEMS_PER_SPAWN: int = 3
 const BUBBLE_FUSE_SECONDS: float = 3.0
 const EXPLOSION_SECONDS: float = 0.45
-const TRAP_SECONDS: float = 3.0
+const TRAP_SECONDS: float = 10.0
 const RESPAWN_SECONDS: float = 2.4
 const RESPAWN_INVINCIBLE_SECONDS: float = 1.0
-const ROUND_SECONDS: float = 180.0
+const ROUND_SECONDS: float = 120.0
 const AI_THINK_SECONDS: float = 0.15
+
+
+static func speed_from_points(points: int) -> float:
+	return clampf(
+		BASE_MOVE_SPEED + float(maxi(0, points)) * SPEED_PER_POINT,
+		0.0,
+		MAX_SPEED
+	)
+
+
+static func speed_points_from_pixels(speed: float) -> int:
+	return clampi(
+		roundi((speed - BASE_MOVE_SPEED) / SPEED_PER_POINT),
+		0,
+		MAX_SPEED_POINTS
+	)
+
 
 static func grid_to_world(cell: Vector2i) -> Vector2:
 	return GRID_ORIGIN + Vector2(cell) * CELL_SIZE + Vector2.ONE * CELL_SIZE * 0.5

@@ -1,6 +1,6 @@
 class_name CharacterCatalog
 extends RefCounted
-## Cosmetic-only registry for the eight upright forest animals.
+## Stable registry for eight upright animals and their starting archetypes.
 
 const IDS: Array[String] = [
 	"cat", "dog", "rabbit", "bear",
@@ -66,6 +66,18 @@ const ACCENT_COLORS: Dictionary = {
 	"penguin": Color("#f2ead8"),
 	"capybara": Color("#d8b58a"),
 }
+## Each archetype owns six initial points. These fixed rolls keep character
+## choice meaningful and reproducible across retries and Web saves.
+const INITIAL_ATTRIBUTES: Dictionary = {
+	"cat": {"speed": 3, "bubble": 2, "power": 1},
+	"dog": {"speed": 2, "bubble": 2, "power": 2},
+	"rabbit": {"speed": 4, "bubble": 1, "power": 1},
+	"bear": {"speed": 1, "bubble": 1, "power": 4},
+	"fox": {"speed": 3, "bubble": 1, "power": 2},
+	"raccoon": {"speed": 1, "bubble": 3, "power": 2},
+	"penguin": {"speed": 1, "bubble": 4, "power": 1},
+	"capybara": {"speed": 1, "bubble": 2, "power": 3},
+}
 
 static var _definitions: Dictionary = {}
 
@@ -128,22 +140,16 @@ static func _ensure_definitions() -> void:
 
 
 static func _add(character_id: String) -> void:
+	var attributes := INITIAL_ATTRIBUTES[character_id] as Dictionary
 	var definition := CharacterDefinition.new().configure(
 		character_id,
 		str(DISPLAY_NAMES[character_id]),
-		"res://assets/models/characters/%s.glb" % character_id,
+		"res://assets/art/storybook25d/characters/%s" % character_id,
 		BASE_COLORS[character_id] as Color,
 		ACCENT_COLORS[character_id] as Color,
-		["Idle"],
-		["Waddle"],
-		0.0,
-		1.0,
-		"",
-		["Head"]
+		int(attributes["speed"]),
+		int(attributes["bubble"]),
+		int(attributes["power"]),
+		0.00265
 	)
-	definition.team_tint_material_names = ["TeamTint", "FootRing"]
-	definition.place_bubble_animation_aliases = ["PlaceBubble"]
-	definition.trapped_animation_aliases = ["Trapped"]
-	definition.defeat_animation_aliases = ["Defeat"]
-	definition.victory_animation_aliases = ["Victory"]
 	_definitions[character_id] = definition

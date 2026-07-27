@@ -60,12 +60,15 @@ func _ready() -> void:
 	_rng.randomize()
 	_ensure_input_actions()
 	settings = MatchSettings.load_from_disk()
+	TranslationServer.set_locale(settings.language_code)
+	DisplayServer.window_set_title(tr("森林泡泡染色战"))
 	run_progress = RunProgress.new()
 	_build_scene_tree()
 	var web_adapter := WebPlatformAdapter.new()
 	web_adapter.name = "WebPlatformAdapter"
 	add_child(web_adapter)
 	_connect_hud()
+	hud.sync_settings(settings)
 	if DisplayServer.get_name() == "headless":
 		_begin_new_run()
 		start_match()
@@ -334,7 +337,6 @@ func request_bomb(actor: GameActor) -> bool:
 	# transaction. Defer it so AI planning frames stay bounded under four actors.
 	_arena_view.call_deferred("add_bubble", bubble)
 	actor.stats.active_bubbles += 1
-	_arena_view.play_actor_action(actor, &"PlaceBubble")
 	_audio_call(&"play_sfx", [&"lay"])
 	return true
 
@@ -391,6 +393,7 @@ func _connect_hud() -> void:
 	hud.camera_adjustment_finished.connect(_arena_view.finish_camera_adjustment)
 	hud.settings_open_requested.connect(_open_settings)
 	hud.settings_close_requested.connect(_close_settings)
+	hud.language_changed.connect(_on_language_changed)
 	_arena_view.zoom_changed.connect(hud.update_zoom)
 	_arena_view.camera_pose_changed.connect(hud.update_camera_pose)
 	_arena_view.camera_adjustment_finished.connect(_on_camera_adjustment_finished)
@@ -433,7 +436,11 @@ func _spawn_fighters() -> void:
 		player_character.id,
 		run_progress.player_color_id
 	)
-	run_progress.apply_allocation(_player.stats, run_progress.player_allocation())
+	run_progress.apply_character_allocation(
+		_player.stats,
+		run_progress.player_allocation(),
+		player_character.id
+	)
 	used_cells.append(board.map_data.player_spawn)
 	for index: int in range(run_progress.ai_count()):
 		var spawn: Vector2i = _find_ai_spawn(used_cells)
@@ -447,7 +454,11 @@ func _spawn_fighters() -> void:
 			ai_character_id,
 			run_progress.ai_color_id
 		)
-		run_progress.apply_allocation(ai_actor.stats, run_progress.ai_allocation(index))
+		run_progress.apply_character_allocation(
+			ai_actor.stats,
+			run_progress.ai_allocation(index),
+			ai_character_id
+		)
 		var controller := RuleAI.new()
 		controller.name = "RuleAI%d" % (index + 1)
 		ai_actor.add_child(controller)
@@ -629,7 +640,6 @@ func _resolve_touch_pair(left: GameActor, right: GameActor) -> void:
 
 func _on_actor_died(victim: GameActor, defeating_team: int, attacker: GameActor) -> void:
 	_audio_call(&"play_sfx", [&"die"])
-	_arena_view.play_actor_action(victim, &"Defeat")
 	release_item_claims_for_actor(victim.get_instance_id())
 	var has_opposing_defeater: bool = defeating_team in [
 		PaintPalette.TEAM_PLAYER,
@@ -651,7 +661,6 @@ func _on_actor_died(victim: GameActor, defeating_team: int, attacker: GameActor)
 
 func _on_actor_trapped(victim: GameActor, _attacker: GameActor) -> void:
 	release_item_claims_for_actor(victim.get_instance_id())
-	_arena_view.play_actor_action(victim, &"Trapped")
 
 func _respawn_later(actor: GameActor) -> void:
 	if not is_instance_valid(actor):
@@ -744,13 +753,6 @@ func _end_round() -> void:
 	_last_round_won = player_cells > ai_cells
 	for actor: GameActor in _actors:
 		if is_instance_valid(actor):
-			var actor_won := (
-				actor.team_id == PaintPalette.TEAM_PLAYER and _last_round_won
-			) or (
-				actor.team_id == PaintPalette.TEAM_AI and ai_cells > player_cells
-			)
-			if actor_won:
-				_arena_view.play_actor_action(actor, &"Victory")
 			actor.stats.clear_stage_item_bonuses()
 	hud.update_player_stats(_player)
 	hud.update_item_bonuses(_player)
@@ -822,11 +824,12 @@ func _resume_match() -> void:
 
 
 func _open_settings() -> void:
-	if app_state != AppState.MATCH or _round_over:
+	if app_state == AppState.RESULT:
 		return
-	_is_paused = true
 	hud.show_settings()
-	get_tree().paused = true
+	if app_state == AppState.MATCH and not _round_over:
+		_is_paused = true
+		get_tree().paused = true
 
 
 func _close_settings() -> void:
@@ -835,6 +838,17 @@ func _close_settings() -> void:
 		return
 	get_tree().paused = false
 	_is_paused = false
+
+
+func _on_language_changed(language_code: String) -> void:
+	settings.language_code = language_code
+	settings.normalize()
+	TranslationServer.set_locale(settings.language_code)
+	DisplayServer.window_set_title(tr("森林泡泡染色战"))
+	settings.save_to_disk()
+	hud.sync_settings(settings)
+	hud.refresh_localized_text(run_progress, _player)
+	_update_scoreboard()
 
 func _ensure_input_actions() -> void:
 	_register_action(&"move_left", [KEY_LEFT, KEY_A])
@@ -887,7 +901,8 @@ func _spawn_due_items() -> void:
 	var round_ms: int = int(GameConstants.ROUND_SECONDS * 1000.0)
 	while _next_item_spawn_ms < round_ms \
 			and int(_simulation_time_ms) >= _next_item_spawn_ms:
-		_spawn_random_item()
+		for _item_index: int in range(GameConstants.ITEMS_PER_SPAWN):
+			_spawn_random_item()
 		_next_item_spawn_ms += interval_ms
 
 
@@ -1005,6 +1020,8 @@ func release_item_claims_for_actor(actor_id: int) -> void:
 
 
 func _prune_item_claims() -> void:
+	if _item_claims.is_empty():
+		return
 	var now_ms: int = get_simulation_time_ms()
 	for item_id: Variant in _item_claims.keys():
 		var claim: Dictionary = _item_claims[item_id] as Dictionary

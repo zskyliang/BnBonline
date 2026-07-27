@@ -1,0 +1,1047 @@
+{
+  "version": 3,
+  "generator": "Codex built-in ImageGen",
+  "characters": {
+    "cat": {
+      "pixel_size": 0.00265,
+      "canvas": [
+        512,
+        512
+      ],
+      "source_sha256": {
+        "walk_down": "20857d0cf526f216793523209ad5d57763a1e8b8e9dd5aea9e6cbbb42615025a",
+        "walk_up": "eab7083f056e145af1591d19903d3e90a6ee1e1b64e9a3562836b8861f30fe21",
+        "walk_left": "4b48d849e0d4fcab141e068a895db049cc7a130aaf83928da8f3415b181ac7e3",
+        "walk_right": "7f5d3e99c542132b433dbf9b596057e947c7f05a309f550ce9482b4405bc63a6",
+        "idle_directions": "0ce9545047a18c367a771b5c14aac4b8de858fe0c6a551005c36080e8a075bc3",
+        "trapped": "46678051aa76ab4f1e397d7dee85cfd21522023171048cbc4d21d225da165e50"
+      },
+      "logical_actions": [
+        "Idle",
+        "WalkUp",
+        "WalkDown",
+        "WalkLeft",
+        "WalkRight",
+        "Trapped"
+      ],
+      "movement": {
+        "down": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_down_0.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_down_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_down_1.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_down_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_down_2.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_down_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_down_3.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_down_3_mask.png"
+          }
+        ],
+        "up": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_up_0.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_up_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_up_1.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_up_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_up_2.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_up_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_up_3.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_up_3_mask.png"
+          }
+        ],
+        "left": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_left_0.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_left_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_left_1.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_left_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_left_2.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_left_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_left_3.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_left_3_mask.png"
+          }
+        ],
+        "right": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_right_0.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_right_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_right_1.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_right_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_right_2.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_right_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/cat/walk_right_3.png",
+            "mask": "res://assets/art/storybook25d/characters/cat/walk_right_3_mask.png"
+          }
+        ]
+      },
+      "idle": {
+        "down": {
+          "texture": "res://assets/art/storybook25d/characters/cat/idle_down.png",
+          "mask": "res://assets/art/storybook25d/characters/cat/idle_down_mask.png"
+        },
+        "up": {
+          "texture": "res://assets/art/storybook25d/characters/cat/idle_up.png",
+          "mask": "res://assets/art/storybook25d/characters/cat/idle_up_mask.png"
+        },
+        "left": {
+          "texture": "res://assets/art/storybook25d/characters/cat/idle_left.png",
+          "mask": "res://assets/art/storybook25d/characters/cat/idle_left_mask.png"
+        },
+        "right": {
+          "texture": "res://assets/art/storybook25d/characters/cat/idle_right.png",
+          "mask": "res://assets/art/storybook25d/characters/cat/idle_right_mask.png"
+        }
+      },
+      "trapped": {
+        "texture": "res://assets/art/storybook25d/characters/cat/trapped.png",
+        "mask": "res://assets/art/storybook25d/characters/cat/trapped_mask.png"
+      }
+    },
+    "dog": {
+      "pixel_size": 0.00265,
+      "canvas": [
+        512,
+        512
+      ],
+      "source_sha256": {
+        "walk_down": "7948c15ebab45116336c8f052926c51185b9ee8924df8707debd938bb68e82c8",
+        "walk_up": "5a51fed47d3fabf13a4b17c5dd81cadb2ce68bee155dd58c2373c80b64dbe21c",
+        "walk_left": "45bab216d463c6a3c435232f56145d89809cf3047e7483c4d11e247a08774fee",
+        "walk_right": "de6b8b9edab2ddac36d9cf2338547965ea43c80789f6d0557a96d6f26d2eb7e0",
+        "idle_directions": "f380bc45ba557c73f193df0e0967e13c7a442317cb3a8f526606eb628d7d215e",
+        "trapped": "c412c678b3f65ce97077216dbc66a41c95bf7a5e4982443494a98b84fc5cef25"
+      },
+      "logical_actions": [
+        "Idle",
+        "WalkUp",
+        "WalkDown",
+        "WalkLeft",
+        "WalkRight",
+        "Trapped"
+      ],
+      "movement": {
+        "down": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_down_0.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_down_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_down_1.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_down_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_down_2.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_down_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_down_3.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_down_3_mask.png"
+          }
+        ],
+        "up": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_up_0.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_up_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_up_1.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_up_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_up_2.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_up_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_up_3.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_up_3_mask.png"
+          }
+        ],
+        "left": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_left_0.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_left_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_left_1.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_left_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_left_2.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_left_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_left_3.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_left_3_mask.png"
+          }
+        ],
+        "right": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_right_0.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_right_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_right_1.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_right_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_right_2.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_right_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/dog/walk_right_3.png",
+            "mask": "res://assets/art/storybook25d/characters/dog/walk_right_3_mask.png"
+          }
+        ]
+      },
+      "idle": {
+        "down": {
+          "texture": "res://assets/art/storybook25d/characters/dog/idle_down.png",
+          "mask": "res://assets/art/storybook25d/characters/dog/idle_down_mask.png"
+        },
+        "up": {
+          "texture": "res://assets/art/storybook25d/characters/dog/idle_up.png",
+          "mask": "res://assets/art/storybook25d/characters/dog/idle_up_mask.png"
+        },
+        "left": {
+          "texture": "res://assets/art/storybook25d/characters/dog/idle_left.png",
+          "mask": "res://assets/art/storybook25d/characters/dog/idle_left_mask.png"
+        },
+        "right": {
+          "texture": "res://assets/art/storybook25d/characters/dog/idle_right.png",
+          "mask": "res://assets/art/storybook25d/characters/dog/idle_right_mask.png"
+        }
+      },
+      "trapped": {
+        "texture": "res://assets/art/storybook25d/characters/dog/trapped.png",
+        "mask": "res://assets/art/storybook25d/characters/dog/trapped_mask.png"
+      }
+    },
+    "rabbit": {
+      "pixel_size": 0.00265,
+      "canvas": [
+        512,
+        512
+      ],
+      "source_sha256": {
+        "walk_down": "5bd1551cdddf8c7dd66d1f92cd417902b4687a9cd2cf90833fcb8961360e890c",
+        "walk_up": "e73a870cf992515708532c3e0f7b850c0b0b84a467d110a1df8e9abaee4d3f2b",
+        "walk_left": "bfa70520e9174ee7439d27bf4106fdb53001469e826971239811f3ffb7468bae",
+        "walk_right": "2a19577de59ae8a69a64e100ca82c2c7dfee64de9502303c7ea9c98509a867a0",
+        "idle_directions": "548b7e4a27d31598f8f9de8b7161f8296dd04542018825ee54dcac7e95dabd99",
+        "trapped": "33a199f3181672d86cee7137aa6143a4a766b7deb99d86ee19210f6d2b629437"
+      },
+      "logical_actions": [
+        "Idle",
+        "WalkUp",
+        "WalkDown",
+        "WalkLeft",
+        "WalkRight",
+        "Trapped"
+      ],
+      "movement": {
+        "down": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_down_0.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_down_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_down_1.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_down_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_down_2.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_down_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_down_3.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_down_3_mask.png"
+          }
+        ],
+        "up": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_up_0.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_up_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_up_1.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_up_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_up_2.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_up_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_up_3.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_up_3_mask.png"
+          }
+        ],
+        "left": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_left_0.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_left_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_left_1.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_left_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_left_2.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_left_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_left_3.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_left_3_mask.png"
+          }
+        ],
+        "right": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_right_0.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_right_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_right_1.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_right_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_right_2.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_right_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/rabbit/walk_right_3.png",
+            "mask": "res://assets/art/storybook25d/characters/rabbit/walk_right_3_mask.png"
+          }
+        ]
+      },
+      "idle": {
+        "down": {
+          "texture": "res://assets/art/storybook25d/characters/rabbit/idle_down.png",
+          "mask": "res://assets/art/storybook25d/characters/rabbit/idle_down_mask.png"
+        },
+        "up": {
+          "texture": "res://assets/art/storybook25d/characters/rabbit/idle_up.png",
+          "mask": "res://assets/art/storybook25d/characters/rabbit/idle_up_mask.png"
+        },
+        "left": {
+          "texture": "res://assets/art/storybook25d/characters/rabbit/idle_left.png",
+          "mask": "res://assets/art/storybook25d/characters/rabbit/idle_left_mask.png"
+        },
+        "right": {
+          "texture": "res://assets/art/storybook25d/characters/rabbit/idle_right.png",
+          "mask": "res://assets/art/storybook25d/characters/rabbit/idle_right_mask.png"
+        }
+      },
+      "trapped": {
+        "texture": "res://assets/art/storybook25d/characters/rabbit/trapped.png",
+        "mask": "res://assets/art/storybook25d/characters/rabbit/trapped_mask.png"
+      }
+    },
+    "bear": {
+      "pixel_size": 0.00265,
+      "canvas": [
+        512,
+        512
+      ],
+      "source_sha256": {
+        "walk_down": "9af353ba03817839992c112bbad11619ad0f4725cf508224a11bcf435bac1db5",
+        "walk_up": "eecb6c7978c4e4fb391cafbdb27e915da927fb881cf325cfcd819a59923f960c",
+        "walk_left": "50a2570747c1f3b0591fc41c3ae2758aa739d8a9e7d30e2a0432f7e2d6d72196",
+        "walk_right": "4fdb638a012a3ab15378dd6c31e190cc55c0fa54d4ba02596b01b8e368cddb31",
+        "idle_directions": "760e4bc8291a8d5b67d019351f7e5d73e9fb0254b4d3d10acc66563aeff05c91",
+        "trapped": "9a017b5a97a27e927a6bd80efe13bd451f01c899cc79df1dcfdfea5e6f301c33"
+      },
+      "logical_actions": [
+        "Idle",
+        "WalkUp",
+        "WalkDown",
+        "WalkLeft",
+        "WalkRight",
+        "Trapped"
+      ],
+      "movement": {
+        "down": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_down_0.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_down_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_down_1.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_down_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_down_2.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_down_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_down_3.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_down_3_mask.png"
+          }
+        ],
+        "up": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_up_0.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_up_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_up_1.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_up_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_up_2.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_up_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_up_3.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_up_3_mask.png"
+          }
+        ],
+        "left": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_left_0.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_left_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_left_1.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_left_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_left_2.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_left_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_left_3.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_left_3_mask.png"
+          }
+        ],
+        "right": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_right_0.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_right_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_right_1.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_right_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_right_2.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_right_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/bear/walk_right_3.png",
+            "mask": "res://assets/art/storybook25d/characters/bear/walk_right_3_mask.png"
+          }
+        ]
+      },
+      "idle": {
+        "down": {
+          "texture": "res://assets/art/storybook25d/characters/bear/idle_down.png",
+          "mask": "res://assets/art/storybook25d/characters/bear/idle_down_mask.png"
+        },
+        "up": {
+          "texture": "res://assets/art/storybook25d/characters/bear/idle_up.png",
+          "mask": "res://assets/art/storybook25d/characters/bear/idle_up_mask.png"
+        },
+        "left": {
+          "texture": "res://assets/art/storybook25d/characters/bear/idle_left.png",
+          "mask": "res://assets/art/storybook25d/characters/bear/idle_left_mask.png"
+        },
+        "right": {
+          "texture": "res://assets/art/storybook25d/characters/bear/idle_right.png",
+          "mask": "res://assets/art/storybook25d/characters/bear/idle_right_mask.png"
+        }
+      },
+      "trapped": {
+        "texture": "res://assets/art/storybook25d/characters/bear/trapped.png",
+        "mask": "res://assets/art/storybook25d/characters/bear/trapped_mask.png"
+      }
+    },
+    "fox": {
+      "pixel_size": 0.00265,
+      "canvas": [
+        512,
+        512
+      ],
+      "source_sha256": {
+        "walk_down": "ab906ee7cdc2844d6eefa4b5cf857076d6138fea1554aba6af2f886ff6f076a7",
+        "walk_up": "47899a35286dde1740026dec86ce2cfb5fb4776f472305a0933e3de0425c7939",
+        "walk_left": "928c037a5741d637d8699836def6d29a6876ea319cebb42db1f57b5297b59525",
+        "walk_right": "c1be67146da295a60a66f3fda06c6797ae2b0d7588a78be787bd5c08f0c63a0f",
+        "idle_directions": "c6a74e12c592576f7c00ee02c5d19269e8b375b1f3892611ccdd26b85a6b77df",
+        "trapped": "e7bb7a2198b785c36e5790acf02cc11b3b2c2325fb00686ea7c4fac2d4d0404c"
+      },
+      "logical_actions": [
+        "Idle",
+        "WalkUp",
+        "WalkDown",
+        "WalkLeft",
+        "WalkRight",
+        "Trapped"
+      ],
+      "movement": {
+        "down": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_down_0.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_down_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_down_1.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_down_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_down_2.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_down_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_down_3.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_down_3_mask.png"
+          }
+        ],
+        "up": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_up_0.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_up_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_up_1.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_up_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_up_2.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_up_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_up_3.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_up_3_mask.png"
+          }
+        ],
+        "left": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_left_0.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_left_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_left_1.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_left_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_left_2.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_left_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_left_3.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_left_3_mask.png"
+          }
+        ],
+        "right": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_right_0.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_right_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_right_1.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_right_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_right_2.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_right_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/fox/walk_right_3.png",
+            "mask": "res://assets/art/storybook25d/characters/fox/walk_right_3_mask.png"
+          }
+        ]
+      },
+      "idle": {
+        "down": {
+          "texture": "res://assets/art/storybook25d/characters/fox/idle_down.png",
+          "mask": "res://assets/art/storybook25d/characters/fox/idle_down_mask.png"
+        },
+        "up": {
+          "texture": "res://assets/art/storybook25d/characters/fox/idle_up.png",
+          "mask": "res://assets/art/storybook25d/characters/fox/idle_up_mask.png"
+        },
+        "left": {
+          "texture": "res://assets/art/storybook25d/characters/fox/idle_left.png",
+          "mask": "res://assets/art/storybook25d/characters/fox/idle_left_mask.png"
+        },
+        "right": {
+          "texture": "res://assets/art/storybook25d/characters/fox/idle_right.png",
+          "mask": "res://assets/art/storybook25d/characters/fox/idle_right_mask.png"
+        }
+      },
+      "trapped": {
+        "texture": "res://assets/art/storybook25d/characters/fox/trapped.png",
+        "mask": "res://assets/art/storybook25d/characters/fox/trapped_mask.png"
+      }
+    },
+    "raccoon": {
+      "pixel_size": 0.00265,
+      "canvas": [
+        512,
+        512
+      ],
+      "source_sha256": {
+        "walk_down": "17aaa3f97a0d14166587f3cddf9e5f2907bf52cb058406b27f5b6cdc0ae730f8",
+        "walk_up": "39d3cb9a20e5577f68b0d6691cca2ff4a4b98f128f5dc6f9ccfd60ec4201a025",
+        "walk_left": "554fbf063a4c0cc1d695f3ebc27086de0d0c5f536746fee932020d4af419eb1b",
+        "walk_right": "00d9c592067f6b09b1390ccec529ae81f53431d07cf7c02dadbe3c32e05b3348",
+        "idle_directions": "151444b0c94b6b01afb8d633245b00645f7798c14e8f3f85c249a91cdf85be71",
+        "trapped": "b3d977ecf9e92f71c98ffe09665d30321ac28d568a547666781c177f025944f1"
+      },
+      "logical_actions": [
+        "Idle",
+        "WalkUp",
+        "WalkDown",
+        "WalkLeft",
+        "WalkRight",
+        "Trapped"
+      ],
+      "movement": {
+        "down": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_down_0.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_down_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_down_1.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_down_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_down_2.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_down_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_down_3.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_down_3_mask.png"
+          }
+        ],
+        "up": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_up_0.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_up_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_up_1.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_up_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_up_2.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_up_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_up_3.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_up_3_mask.png"
+          }
+        ],
+        "left": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_left_0.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_left_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_left_1.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_left_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_left_2.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_left_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_left_3.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_left_3_mask.png"
+          }
+        ],
+        "right": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_right_0.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_right_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_right_1.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_right_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_right_2.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_right_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/raccoon/walk_right_3.png",
+            "mask": "res://assets/art/storybook25d/characters/raccoon/walk_right_3_mask.png"
+          }
+        ]
+      },
+      "idle": {
+        "down": {
+          "texture": "res://assets/art/storybook25d/characters/raccoon/idle_down.png",
+          "mask": "res://assets/art/storybook25d/characters/raccoon/idle_down_mask.png"
+        },
+        "up": {
+          "texture": "res://assets/art/storybook25d/characters/raccoon/idle_up.png",
+          "mask": "res://assets/art/storybook25d/characters/raccoon/idle_up_mask.png"
+        },
+        "left": {
+          "texture": "res://assets/art/storybook25d/characters/raccoon/idle_left.png",
+          "mask": "res://assets/art/storybook25d/characters/raccoon/idle_left_mask.png"
+        },
+        "right": {
+          "texture": "res://assets/art/storybook25d/characters/raccoon/idle_right.png",
+          "mask": "res://assets/art/storybook25d/characters/raccoon/idle_right_mask.png"
+        }
+      },
+      "trapped": {
+        "texture": "res://assets/art/storybook25d/characters/raccoon/trapped.png",
+        "mask": "res://assets/art/storybook25d/characters/raccoon/trapped_mask.png"
+      }
+    },
+    "penguin": {
+      "pixel_size": 0.00265,
+      "canvas": [
+        512,
+        512
+      ],
+      "source_sha256": {
+        "walk_down": "05e7945bd89d14af509532017c1b5f54aa8ea9d79bd077b6e27197a38676724d",
+        "walk_up": "935e4381d765d5f4ed6da12de42d246d77ba1a3996fa2387f011d89d1cee2817",
+        "walk_left": "b3969720303c758a23de7e17eccd76ab353cac8f16a42438ba960906fc740d2b",
+        "walk_right": "04a4c647aa5c987c63a45745399e2a62a22891c23d8640b7d8a10d54f1adeb03",
+        "idle_directions": "00d07c7c75911b21314cd48d92a7adbedb3f509763bde370f3c0b5006e3882c4",
+        "trapped": "bf94a4b3ae879062bb68ec6543a270efa64dc79cf41e56922a0a28dc10bde671"
+      },
+      "logical_actions": [
+        "Idle",
+        "WalkUp",
+        "WalkDown",
+        "WalkLeft",
+        "WalkRight",
+        "Trapped"
+      ],
+      "movement": {
+        "down": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_down_0.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_down_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_down_1.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_down_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_down_2.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_down_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_down_3.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_down_3_mask.png"
+          }
+        ],
+        "up": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_up_0.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_up_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_up_1.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_up_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_up_2.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_up_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_up_3.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_up_3_mask.png"
+          }
+        ],
+        "left": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_left_0.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_left_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_left_1.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_left_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_left_2.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_left_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_left_3.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_left_3_mask.png"
+          }
+        ],
+        "right": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_right_0.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_right_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_right_1.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_right_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_right_2.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_right_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/penguin/walk_right_3.png",
+            "mask": "res://assets/art/storybook25d/characters/penguin/walk_right_3_mask.png"
+          }
+        ]
+      },
+      "idle": {
+        "down": {
+          "texture": "res://assets/art/storybook25d/characters/penguin/idle_down.png",
+          "mask": "res://assets/art/storybook25d/characters/penguin/idle_down_mask.png"
+        },
+        "up": {
+          "texture": "res://assets/art/storybook25d/characters/penguin/idle_up.png",
+          "mask": "res://assets/art/storybook25d/characters/penguin/idle_up_mask.png"
+        },
+        "left": {
+          "texture": "res://assets/art/storybook25d/characters/penguin/idle_left.png",
+          "mask": "res://assets/art/storybook25d/characters/penguin/idle_left_mask.png"
+        },
+        "right": {
+          "texture": "res://assets/art/storybook25d/characters/penguin/idle_right.png",
+          "mask": "res://assets/art/storybook25d/characters/penguin/idle_right_mask.png"
+        }
+      },
+      "trapped": {
+        "texture": "res://assets/art/storybook25d/characters/penguin/trapped.png",
+        "mask": "res://assets/art/storybook25d/characters/penguin/trapped_mask.png"
+      }
+    },
+    "capybara": {
+      "pixel_size": 0.00265,
+      "canvas": [
+        512,
+        512
+      ],
+      "source_sha256": {
+        "walk_down": "72d3e0b226c452c107ed5be9786fb2fc1e5de59c1b63379a1ccfdab740075fe8",
+        "walk_up": "16623c9d8b059c38fb3392dfb077e3a86971d01392447614fd70f1367cee1e83",
+        "walk_left": "091f660a20f61126b61ce90879a86a4c4c11db37dd879b7aaa2db152eeed72b7",
+        "walk_right": "413fac1dbd670872ab83a3ffa9d8486650470d1174c4604f0e2ce87f9660ab5e",
+        "idle_directions": "d125a68314598a3860071ac0f2d12ddafbaee54d9b58a4f67930f21822b3cfe0",
+        "trapped": "fe1d1bb920f04856aab19ca59df41bacb8b04e0ca4a6c4afbea9f7ff121df515"
+      },
+      "logical_actions": [
+        "Idle",
+        "WalkUp",
+        "WalkDown",
+        "WalkLeft",
+        "WalkRight",
+        "Trapped"
+      ],
+      "movement": {
+        "down": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_down_0.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_down_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_down_1.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_down_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_down_2.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_down_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_down_3.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_down_3_mask.png"
+          }
+        ],
+        "up": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_up_0.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_up_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_up_1.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_up_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_up_2.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_up_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_up_3.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_up_3_mask.png"
+          }
+        ],
+        "left": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_left_0.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_left_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_left_1.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_left_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_left_2.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_left_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_left_3.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_left_3_mask.png"
+          }
+        ],
+        "right": [
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_right_0.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_right_0_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_right_1.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_right_1_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_right_2.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_right_2_mask.png"
+          },
+          {
+            "texture": "res://assets/art/storybook25d/characters/capybara/walk_right_3.png",
+            "mask": "res://assets/art/storybook25d/characters/capybara/walk_right_3_mask.png"
+          }
+        ]
+      },
+      "idle": {
+        "down": {
+          "texture": "res://assets/art/storybook25d/characters/capybara/idle_down.png",
+          "mask": "res://assets/art/storybook25d/characters/capybara/idle_down_mask.png"
+        },
+        "up": {
+          "texture": "res://assets/art/storybook25d/characters/capybara/idle_up.png",
+          "mask": "res://assets/art/storybook25d/characters/capybara/idle_up_mask.png"
+        },
+        "left": {
+          "texture": "res://assets/art/storybook25d/characters/capybara/idle_left.png",
+          "mask": "res://assets/art/storybook25d/characters/capybara/idle_left_mask.png"
+        },
+        "right": {
+          "texture": "res://assets/art/storybook25d/characters/capybara/idle_right.png",
+          "mask": "res://assets/art/storybook25d/characters/capybara/idle_right_mask.png"
+        }
+      },
+      "trapped": {
+        "texture": "res://assets/art/storybook25d/characters/capybara/trapped.png",
+        "mask": "res://assets/art/storybook25d/characters/capybara/trapped_mask.png"
+      }
+    }
+  },
+  "character_bubbles": {
+    "cat": {
+      "texture": "res://assets/art/storybook25d/effects/character_bubbles/cat.png",
+      "mask": "res://assets/art/storybook25d/effects/character_bubbles/cat_mask.png",
+      "source_sha256": "a4b6a19a509296be785950f2f68436b13cc0ff4045cca25d02a4692023e8b294"
+    },
+    "dog": {
+      "texture": "res://assets/art/storybook25d/effects/character_bubbles/dog.png",
+      "mask": "res://assets/art/storybook25d/effects/character_bubbles/dog_mask.png",
+      "source_sha256": "90c15c45a09f00fe983bd39b3304d2f394a33bbf7ea7f9bad4f6d80e61184f00"
+    },
+    "rabbit": {
+      "texture": "res://assets/art/storybook25d/effects/character_bubbles/rabbit.png",
+      "mask": "res://assets/art/storybook25d/effects/character_bubbles/rabbit_mask.png",
+      "source_sha256": "8cbb88de5c645c4088cbfac8bcf7d5adcb1c2abee7ad7e1a768601aefbc9dda1"
+    },
+    "bear": {
+      "texture": "res://assets/art/storybook25d/effects/character_bubbles/bear.png",
+      "mask": "res://assets/art/storybook25d/effects/character_bubbles/bear_mask.png",
+      "source_sha256": "076720283b0793e72df86ad2acaa651afbe5bb046da5befbfa509fd7f730343f"
+    },
+    "fox": {
+      "texture": "res://assets/art/storybook25d/effects/character_bubbles/fox.png",
+      "mask": "res://assets/art/storybook25d/effects/character_bubbles/fox_mask.png",
+      "source_sha256": "148e519bbdde5d3801a7897797e3f5e4895895fc184658513c374e637c718296"
+    },
+    "raccoon": {
+      "texture": "res://assets/art/storybook25d/effects/character_bubbles/raccoon.png",
+      "mask": "res://assets/art/storybook25d/effects/character_bubbles/raccoon_mask.png",
+      "source_sha256": "edda5a7a0552e58a51eb2a5ef1d8454ab3d923fcd807ba5eb8fb178f8c60cdb7"
+    },
+    "penguin": {
+      "texture": "res://assets/art/storybook25d/effects/character_bubbles/penguin.png",
+      "mask": "res://assets/art/storybook25d/effects/character_bubbles/penguin_mask.png",
+      "source_sha256": "e9d66f0821ccb636165927b12530e5a7349011fdc5ac0656b2a9bbcdf1fd5d9f"
+    },
+    "capybara": {
+      "texture": "res://assets/art/storybook25d/effects/character_bubbles/capybara.png",
+      "mask": "res://assets/art/storybook25d/effects/character_bubbles/capybara_mask.png",
+      "source_sha256": "fc6dea9105c9501407efc860aa05b007feaf680173e19342d16c929aa2e8380d"
+    }
+  },
+  "plant_wind": {
+    "conifer": {
+      "frames": [
+        "res://assets/art/storybook25d/environment/wind/conifer_0.png",
+        "res://assets/art/storybook25d/environment/wind/conifer_1.png",
+        "res://assets/art/storybook25d/environment/wind/conifer_2.png",
+        "res://assets/art/storybook25d/environment/wind/conifer_3.png"
+      ],
+      "source_sha256": "a160c0b8a005b8a364d5c1ce00f9b0673436ba005f2a5a91710aea7be22393fe"
+    },
+    "bush": {
+      "frames": [
+        "res://assets/art/storybook25d/environment/wind/bush_0.png",
+        "res://assets/art/storybook25d/environment/wind/bush_1.png",
+        "res://assets/art/storybook25d/environment/wind/bush_2.png",
+        "res://assets/art/storybook25d/environment/wind/bush_3.png"
+      ],
+      "source_sha256": "238abb5aa276e7b754ff53f26dea5ca32564e7549c4e4f81222f5fc2343c4ffb"
+    },
+    "mushrooms": {
+      "frames": [
+        "res://assets/art/storybook25d/environment/wind/mushrooms_0.png",
+        "res://assets/art/storybook25d/environment/wind/mushrooms_1.png",
+        "res://assets/art/storybook25d/environment/wind/mushrooms_2.png",
+        "res://assets/art/storybook25d/environment/wind/mushrooms_3.png"
+      ],
+      "source_sha256": "c7f8f78b36e20774d8b94d7e236f80c0099ced0fc6333ee52d19025d820489f0"
+    },
+    "flowers": {
+      "frames": [
+        "res://assets/art/storybook25d/environment/wind/flowers_0.png",
+        "res://assets/art/storybook25d/environment/wind/flowers_1.png",
+        "res://assets/art/storybook25d/environment/wind/flowers_2.png",
+        "res://assets/art/storybook25d/environment/wind/flowers_3.png"
+      ],
+      "source_sha256": "228e81e46159bc9d064e79894d146d6c6c00aaab8f11ce78f0b12324bb01c43d"
+    },
+    "lavender": {
+      "frames": [
+        "res://assets/art/storybook25d/environment/wind/lavender_0.png",
+        "res://assets/art/storybook25d/environment/wind/lavender_1.png",
+        "res://assets/art/storybook25d/environment/wind/lavender_2.png",
+        "res://assets/art/storybook25d/environment/wind/lavender_3.png"
+      ],
+      "source_sha256": "35aa663afe59966b5f150c6197fd0bebaa2f8765c9987c3eb09f6b95bf24f42f"
+    }
+  }
+}

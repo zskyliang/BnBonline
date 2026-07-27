@@ -31,17 +31,21 @@ func _test_palette_and_settings() -> void:
 		unique_colors[PaintPalette.get_color(color_id).to_html()] = true
 	_check(unique_colors.size() == 7, "all seven paint colors are visually distinct")
 	_check(
-		MatchSettings.WEB_STORAGE_KEY == "bnb.settings.v6" \
+		MatchSettings.WEB_STORAGE_KEY == "bnb.settings.v8" \
+			and "bnb.settings.v7" in MatchSettings.LEGACY_WEB_STORAGE_KEYS \
+			and "bnb.settings.v6" in MatchSettings.LEGACY_WEB_STORAGE_KEYS \
 			and "bnb.settings.v5" in MatchSettings.LEGACY_WEB_STORAGE_KEYS \
 			and "bnb.settings.v4" in MatchSettings.LEGACY_WEB_STORAGE_KEYS \
 			and "bnb.settings.v3" in MatchSettings.LEGACY_WEB_STORAGE_KEYS \
 			and "bnb.settings.v2" in MatchSettings.LEGACY_WEB_STORAGE_KEYS,
-		"appearance and zoom settings migrate from v5 through v2 into v6"
+		"language, appearance, and zoom settings migrate from v7 through v2 into v8"
 	)
 	var legacy_settings := MatchSettings.new()
 	legacy_settings.apply_dictionary({"character_id": "ninja"})
 	_check(
-		legacy_settings.camera_azimuth == MatchSettings.DEFAULT_CAMERA_AZIMUTH \
+		legacy_settings.language_code == MatchSettings.DEFAULT_LANGUAGE_CODE \
+			and legacy_settings.language_code == "en" \
+			and legacy_settings.camera_azimuth == MatchSettings.DEFAULT_CAMERA_AZIMUTH \
 			and legacy_settings.camera_elevation == MatchSettings.DEFAULT_CAMERA_ELEVATION \
 			and legacy_settings.camera_zoom == MatchSettings.DEFAULT_CAMERA_ZOOM,
 		"legacy settings without camera fields receive the current defaults"
@@ -55,10 +59,16 @@ func _test_palette_and_settings() -> void:
 		"camera_azimuth": 999.0,
 		"camera_elevation": -999.0,
 		"camera_zoom": 9.0,
+		"language_code": "zh",
 	})
 	_check(settings.character_id == "bear", "legacy role IDs migrate by original card order")
 	_check(settings.player_color_id == "purple", "paint color survives settings application")
-	settings.apply_dictionary({"character_id": "missing", "player_color_id": "missing"})
+	_check(settings.language_code == "zh", "Chinese is accepted as a persisted language")
+	settings.apply_dictionary({
+		"character_id": "missing",
+		"player_color_id": "missing",
+		"language_code": "missing",
+	})
 	_check(settings.character_id == "cat", "invalid character falls back to cat")
 	_check(
 		settings.player_color_id == PaintPalette.DEFAULT_PLAYER_COLOR_ID,
@@ -71,10 +81,52 @@ func _test_palette_and_settings() -> void:
 		"legacy angles are ignored while corrupt zoom is clamped"
 	)
 	_check(
-		settings.to_dictionary().keys().size() == 3 \
+		settings.language_code == "en",
+		"invalid or missing language falls back to English"
+	)
+	_check(
+		settings.to_dictionary().keys().size() == 4 \
+			and settings.to_dictionary().get("language_code") == "en" \
 			and not settings.to_dictionary().has("camera_azimuth") \
 			and not settings.to_dictionary().has("camera_elevation"),
-		"only character, team color, and zoom are persisted"
+		"only language, character, team color, and zoom are persisted"
+	)
+	TranslationServer.set_locale("en")
+	_check(
+		tr("森林泡泡染色战") == "Forest Bubble Paint Battle",
+		"English is the default UI translation"
+	)
+	TranslationServer.set_locale("zh")
+	_check(tr("森林泡泡染色战") == "森林泡泡染色战", "Chinese UI translation is available")
+	TranslationServer.set_locale("en")
+	var attribute_signatures: Dictionary = {}
+	for definition: CharacterDefinition in CharacterCatalog.get_all():
+		_check(
+			definition.initial_attribute_total() == 6,
+			"%s owns exactly six initial attribute points" % definition.id
+		)
+		_check(
+			definition.initial_speed_points >= 1 \
+				and definition.initial_bubble_points >= 1 \
+				and definition.initial_power_points >= 1,
+			"%s starts with at least one point on every radar axis" % definition.id
+		)
+		attribute_signatures[
+			"%d/%d/%d" % [
+				definition.initial_speed_points,
+				definition.initial_bubble_points,
+				definition.initial_power_points,
+			]
+		] = true
+	_check(
+		attribute_signatures.size() == CharacterCatalog.IDS.size(),
+		"all eight animal archetypes expose distinct starting radar shapes"
+	)
+	_check(
+		GameConstants.speed_from_points(2) == 150.0 \
+			and GameConstants.speed_from_points(3) == 175.0 \
+			and GameConstants.speed_points_from_pixels(175.0) == 3,
+		"speed points convert deterministically at twenty-five pixels per point"
 	)
 
 
@@ -121,7 +173,7 @@ func _test_blast_and_half_body_rules() -> void:
 		GameRules.both_feet_unsafe(boundary_position, unsafe),
 		"both covered feet remain unsafe"
 	)
-	_check(GameConstants.ROUND_SECONDS == 180.0, "each stage lasts exactly three minutes")
+	_check(GameConstants.ROUND_SECONDS == 120.0, "each stage lasts exactly two minutes")
 
 
 func _test_board_paint_and_locks() -> void:
@@ -182,22 +234,53 @@ func _test_items_and_temporary_stats() -> void:
 	_check(board.can_place_bubble(cell), "bubble placement reopens after pickup")
 	var stats := ActorStats.new()
 	stats.apply_skill_points(2, 1, 3)
-	_check(stats.move_speed == 170.0, "campaign allocation establishes the stage base")
+	_check(
+		stats.speed_points() == 4 and stats.move_speed == 200.0,
+		"campaign allocation exposes speed in twenty-five-pixel points"
+	)
 	stats.apply_stage_item(ArenaItemType.Value.SPEED)
 	stats.apply_stage_item(ArenaItemType.Value.SPEED)
 	stats.apply_stage_item(ArenaItemType.Value.BUBBLE)
 	stats.apply_stage_item(ArenaItemType.Value.POWER)
-	_check(stats.move_speed == 220.0, "speed items stack by twenty-five without a cap")
+	_check(stats.move_speed == 250.0, "speed items each add one twenty-five-pixel point")
 	_check(stats.bubble_capacity == 4, "bubble item stacks on campaign capacity")
 	_check(stats.power == 6, "power item stacks on campaign power")
 	stats.clear_stage_item_bonuses()
 	_check(
-		stats.move_speed == 170.0 and stats.bubble_capacity == 3 and stats.power == 5,
+		stats.move_speed == 200.0 and stats.bubble_capacity == 3 and stats.power == 5,
 		"stage cleanup restores campaign values without removing skill points"
+	)
+	stats.apply_skill_points(999, 999, 999)
+	_check(
+		stats.move_speed == 300.0,
+		"campaign speed is capped at 300 pixels per second"
+	)
+	_check(
+		stats.bubble_capacity == 10 and stats.power == 10,
+		"campaign bubble capacity and power are capped at ten"
+	)
+	_check(
+		not stats.apply_stage_item(ArenaItemType.Value.SPEED)
+			and not stats.apply_stage_item(ArenaItemType.Value.BUBBLE)
+			and not stats.apply_stage_item(ArenaItemType.Value.POWER),
+		"stage pickups cannot raise an attribute beyond its cap"
+	)
+	stats.move_speed = 999.0
+	stats.bubble_capacity = 999
+	stats.power = 999
+	_check(
+		stats.move_speed == 300.0
+			and stats.bubble_capacity == 10
+			and stats.power == 10,
+		"direct stat writes also respect the shared upper bounds"
 	)
 	_check(
 		GameConstants.ITEM_SPAWN_INTERVAL_SECONDS == 10.0,
 		"items use the required ten-second cadence"
+	)
+	_check(
+		GameConstants.ITEMS_PER_SPAWN == 3,
+		"each ten-second item refresh contains exactly three pickups"
 	)
 	board.queue_free()
 
@@ -214,12 +297,15 @@ func _test_run_progression() -> void:
 	_check("fox" not in progress.ai_character_ids, "AI roster excludes player animal")
 	var stats := ActorStats.new()
 	progress.apply_allocation(stats, progress.player_allocation())
-	_check(stats.move_speed == 150.0, "campaign uses base speed")
-	_check(stats.bubble_capacity == 2, "campaign uses base bubble count")
-	_check(stats.power == 2, "campaign uses base power")
+	_check(stats.move_speed == 175.0, "fox starts with three speed points")
+	_check(stats.bubble_capacity == 1, "fox starts with one bubble point")
+	_check(stats.power == 2, "fox starts with two power points")
 	_check(progress.advance_with_skill(RunProgress.SKILL_SPEED, rng), "speed skill advances campaign")
 	progress.apply_allocation(stats, progress.player_allocation())
-	_check(stats.move_speed == 160.0, "speed point adds ten pixels per second")
+	_check(
+		stats.speed_points() == 4 and stats.move_speed == 200.0,
+		"speed reward displays plus one and adds twenty-five pixels per second"
+	)
 	_check(progress.stage_number == 2 and progress.ai_count() == 2, "stage two adds the second AI")
 	var stage_two_allocations: Array[Dictionary] = progress.ai_allocations.duplicate(true)
 	_check(_allocation_total(progress.ai_allocation(0)) == 1, "each AI receives all earned points")
@@ -232,14 +318,20 @@ func _test_run_progression() -> void:
 	progress.advance_with_skill(RunProgress.SKILL_BUBBLE, rng)
 	_check(progress.stage_number == 5 and progress.ai_count() == 4, "later stages remain capped at four AI")
 	progress.apply_allocation(stats, progress.player_allocation())
-	_check(stats.bubble_capacity == 4, "bubble points stack without the old cap")
+	_check(stats.bubble_capacity == 3, "bubble points stack from the fox archetype")
 	_check(stats.power == 3, "power point carries into later stages")
 	var long_run := RunProgress.new()
 	long_run.begin("cat", "red", rng)
 	for _point: int in range(25):
 		long_run.advance_with_skill(RunProgress.SKILL_SPEED, rng)
 	long_run.apply_allocation(stats, long_run.player_allocation())
-	_check(stats.move_speed == 400.0, "long campaigns keep stacking speed")
+	_check(
+		long_run.speed_points == long_run.maximum_skill_points(
+			RunProgress.SKILL_SPEED
+		),
+		"long campaigns stop recording speed points after the useful maximum"
+	)
+	_check(stats.move_speed == 300.0, "long campaigns cap speed at 300 pixels per second")
 
 
 func _test_ai_snapshot_paint_value() -> void:
@@ -321,6 +413,13 @@ func _test_actor_and_bubble_rules() -> void:
 	_check(not player.stats.is_trapped, "first unsafe frame does not trap")
 	player.register_unsafe_frame(enemy)
 	_check(player.stats.is_trapped, "second unsafe frame traps")
+	var trap_timer := player.get("_trap_timer") as Timer
+	_check(
+		is_equal_approx(GameConstants.TRAP_SECONDS, 10.0) \
+			and is_instance_valid(trap_timer) \
+			and is_equal_approx(trap_timer.wait_time, 10.0),
+		"bubble trap remains active for ten seconds"
+	)
 	var death_result: Dictionary = {"team": PaintPalette.TEAM_NEUTRAL}
 	player.died.connect(func(_victim: GameActor, team: int, _attacker: GameActor) -> void:
 		death_result["team"] = team

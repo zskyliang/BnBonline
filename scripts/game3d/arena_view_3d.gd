@@ -15,6 +15,7 @@ var bubble_root: Node3D
 var explosion_root: Node3D
 var item_root: Node3D
 var camera: Camera3D
+var weather_system: ForestWeatherSystem3D
 
 var _current_map_data: MapData
 var _fitted_camera_size: float = 20.0
@@ -30,6 +31,10 @@ func _ready() -> void:
 	board_view = BoardView3D.new()
 	board_view.name = "BoardView3D"
 	add_child(board_view)
+	weather_system = ForestWeatherSystem3D.new()
+	weather_system.name = "ForestWeatherSystem3D"
+	add_child(weather_system)
+	weather_system.wind_strength_changed.connect(board_view.set_wind_strength)
 	bubble_root = Node3D.new()
 	bubble_root.name = "BubbleViews3D"
 	add_child(bubble_root)
@@ -89,13 +94,9 @@ func add_actor(
 	return view
 
 
-func play_actor_action(actor: GameActor, action: StringName) -> bool:
-	if not is_instance_valid(actor):
-		return false
-	var view: ActorView3D = _actor_views.get(actor.get_instance_id()) as ActorView3D
-	if not is_instance_valid(view):
-		return false
-	return view.play_action(action)
+func set_weather(weather: int, immediate: bool = false) -> void:
+	if is_instance_valid(weather_system):
+		weather_system.set_weather(weather, immediate)
 
 
 func actor_view_for(actor: GameActor) -> ActorView3D:

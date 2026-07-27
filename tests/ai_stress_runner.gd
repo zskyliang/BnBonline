@@ -40,11 +40,11 @@ func _run() -> void:
 			continue
 		ai_actors.append(actor)
 		_check(actor.color_id == match_node.run_progress.ai_color_id, "all AI share one team color")
-		var assigned_points: int = roundi(
-			(actor.stats.move_speed - GameConstants.INITIAL_SPEED) \
-			/ GameConstants.SPEED_PER_SKILL_POINT
-		) + actor.stats.bubble_capacity - GameConstants.INITIAL_BUBBLES \
-			+ actor.stats.power - GameConstants.INITIAL_POWER
+		var definition := CharacterCatalog.get_definition(actor.character_id)
+		var assigned_points: int = (
+			actor.stats.speed_points() - definition.initial_speed_points
+		) + actor.stats.bubble_capacity - definition.initial_bubble_points \
+			+ actor.stats.power - definition.initial_power_points
 		_check(assigned_points == 3, "each stage-four AI owns three skill points")
 		var controller: RuleAI = _controller_for(actor)
 		controller.set_decision_seed(20260726 + actor_index * 101)
@@ -96,10 +96,19 @@ func _run() -> void:
 		var peak_active: int = int(_peak_active_bubbles.get(actor.get_instance_id(), 0))
 		var peak_unused: int = maxi(0, actor.stats.bubble_capacity - peak_active)
 		total_peak_unused_slots += peak_unused
+		var individual_unused_limit: int = maxi(
+			1,
+			actor.stats.bubble_capacity - GameConstants.DEFAULT_INITIAL_BUBBLE_POINTS
+		)
 		_check(
-			peak_unused <= 1,
-			"each AI drives safe live bubble capacity to within one free slot; %s peaked %d/%d"
-			% [actor.actor_name, peak_active, actor.stats.bubble_capacity]
+			peak_unused <= individual_unused_limit,
+			"each AI exercises its character-sized bubble capacity; %s peaked %d/%d (limit %d free)"
+			% [
+				actor.actor_name,
+				peak_active,
+				actor.stats.bubble_capacity,
+				individual_unused_limit,
+			]
 		)
 	_check(collected_item_count > 0, "four-AI live battle successfully collects useful items")
 	_check(

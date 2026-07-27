@@ -14,6 +14,40 @@ func _run() -> void:
 	root.add_child(match_node)
 	await process_frame
 	match_node.call("_enter_lobby")
+	match_node.call("_on_language_changed", "en")
+	await process_frame
+	var lobby_settings_button := match_node.hud.find_child(
+		"LobbySettingsButton",
+		true,
+		false
+	) as Button
+	_assert(
+		is_instance_valid(lobby_settings_button) \
+			and tr(lobby_settings_button.text) == "Settings",
+		"lobby exposes the default-English settings entry"
+	)
+	match_node.call("_open_settings")
+	var language_selector := match_node.hud.find_child(
+		"LanguageSelector",
+		true,
+		false
+	) as OptionButton
+	_assert(
+		match_node.hud.is_settings_visible() and not paused \
+			and is_instance_valid(language_selector) \
+			and language_selector.item_count == 2,
+		"lobby settings offers English and Chinese without pausing"
+	)
+	match_node.call("_on_language_changed", "zh")
+	await process_frame
+	_assert(
+		tr(lobby_settings_button.text) == "设置" \
+			and match_node.settings.language_code == "zh",
+		"language selection immediately switches and persists Chinese"
+	)
+	match_node.call("_on_language_changed", "en")
+	await process_frame
+	match_node.call("_close_settings")
 	match_node.settings.character_id = "cat"
 	match_node.settings.player_color_id = "orange"
 	match_node.call("_begin_new_run")
@@ -22,9 +56,10 @@ func _run() -> void:
 	_assert(match_node.run_progress.stage_number == 1, "campaign starts at stage one")
 	_assert(match_node.get_actors().size() == 2, "stage one spawns player and one AI")
 	_assert(
-		match_node._remaining_seconds <= 180.0 and match_node._remaining_seconds > 179.0,
-		"live stage starts at three minutes"
+		match_node._remaining_seconds <= 120.0 and match_node._remaining_seconds > 119.0,
+		"live stage starts at two minutes"
 	)
+	_assert(match_node.hud.timer_label.text == "02:00", "live timer begins at 02:00")
 	_assert(match_node.board.get_open_cells().size() == 195, "live arena exposes all 195 cells")
 	_assert(not InputMap.has_action("self_rescue"), "self-rescue input has been removed")
 	var floor := match_node._arena_view.board_view.find_child(
@@ -76,17 +111,20 @@ func _run() -> void:
 	_stop_ai(match_node)
 	match_node._simulation_time_ms = 10000.0
 	match_node.call("_spawn_due_items")
-	_assert(match_node.board.get_item_states().size() == 1, "first random item spawns at ten seconds")
+	_assert(
+		match_node.board.get_item_states().size() == 3,
+		"three random items spawn together at ten seconds"
+	)
 	var timed_item: ArenaItemState = match_node.board.get_item_states()[0]
 	_assert(
 		match_node.build_ai_snapshot().item_by_id(timed_item.item_id) != null,
 		"AI snapshot exposes live item state"
 	)
-	match_node._simulation_time_ms = 179000.0
+	match_node._simulation_time_ms = 119000.0
 	match_node.call("_spawn_due_items")
 	_assert(
-		match_node.board.get_item_states().size() == 17,
-		"a full stage schedules exactly seventeen ten-second item drops"
+		match_node.board.get_item_states().size() == 33,
+		"a full two-minute stage schedules eleven groups of three item drops"
 	)
 	match_node.board.clear_items()
 	match_node._item_rng.seed = 20260726
@@ -136,25 +174,27 @@ func _run() -> void:
 	match_node.board.spawn_item(ArenaItemType.Value.SPEED, pickup_cell, 10000)
 	match_node.call("_resolve_item_pickups")
 	_assert(
-		player.stats.stage_speed_items == 1 and player.stats.move_speed == 175.0,
+		player.stats.stage_speed_items == 1 and player.stats.move_speed == 200.0,
 		"player pickup applies a stacking stage-only speed bonus"
 	)
 	player.respawn(Vector2i(6, 6))
-	_assert(player.stats.move_speed == 175.0, "respawn preserves current-stage item bonuses")
+	_assert(player.stats.move_speed == 200.0, "respawn preserves current-stage item bonuses")
 	player.position = GameConstants.grid_to_world(Vector2i(7, 6))
-	_assert(match_node.request_bomb(player), "player can place a colored bubble")
 	var player_view := match_node._arena_view.actor_view_for(player)
+	var action_before_placement: StringName = player_view.get_current_action()
+	_assert(match_node.request_bomb(player), "player can place a colored bubble")
 	_assert(
 		is_instance_valid(player_view) \
-			and player_view.get_current_action() == &"PlaceBubble",
-		"successful placement triggers only the cat visual action"
+			and player_view.get_current_action() == action_before_placement \
+			and not player_view.has_action(&"PlaceBubble"),
+		"successful placement does not interrupt the directional movement state"
 	)
 	var bubble := match_node.board.bombs.get(Vector2i(7, 6)) as GameBubble
 	_assert(is_instance_valid(bubble) and bubble.color_id == "orange", "bubble uses player color")
 	bubble.explode_now()
 	await process_frame
 	var first_counts: Dictionary = match_node.board.get_territory_counts()
-	_assert(int(first_counts["player"]) == 9, "power-two explosion paints nine open cells")
+	_assert(int(first_counts["player"]) == 5, "cat's one starting power point paints five open cells")
 	var ai_actor: GameActor = _first_ai(match_node)
 	ai_actor.position = GameConstants.grid_to_world(Vector2i(10, 9))
 	ai_actor.trap(player)
@@ -254,18 +294,19 @@ func _run() -> void:
 	match_node.call("_end_round")
 	_assert(match_node._last_round_won, "strictly higher player territory wins")
 	_assert(
-		player_view.get_current_action() == &"Victory",
-		"winning settlement triggers the cat victory action"
+		player_view.get_current_action() == &"Idle" \
+			and not player_view.has_action(&"Victory"),
+		"winning settlement keeps the last-facing Idle without a victory action"
 	)
 	_assert(
-		player.stats.stage_speed_items == 0 and player.stats.move_speed == 160.0,
+		player.stats.stage_speed_items == 0 and player.stats.move_speed == 200.0,
 		"round settlement removes temporary item bonuses"
 	)
 	_assert(paused, "result pauses live simulation")
 	match_node.call("_advance_stage", RunProgress.SKILL_BUBBLE)
 	await process_frame
 	_assert(match_node.run_progress.stage_number == 3, "skill confirmation enters next stage")
-	_assert(match_node.get_player().stats.move_speed == 160.0, "earlier speed point carries forward")
+	_assert(match_node.get_player().stats.move_speed == 200.0, "earlier speed point carries forward")
 	_assert(
 		match_node.get_player().stats.stage_speed_items == 0,
 		"next stage starts without previous item bonuses"

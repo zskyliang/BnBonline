@@ -11,6 +11,7 @@ var stage_number: int = 1
 var speed_points: int = 0
 var bubble_points: int = 0
 var power_points: int = 0
+var player_character_id: String = "cat"
 var player_color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
 var ai_color_id: String = "blue"
 var ai_character_ids: Array[String] = []
@@ -26,6 +27,9 @@ func begin(
 	speed_points = 0
 	bubble_points = 0
 	power_points = 0
+	self.player_character_id = CharacterCatalog.migrate_legacy_id(
+		player_character_id
+	)
 	player_color_id = (
 		selected_color_id
 		if PaintPalette.is_valid_color_id(selected_color_id)
@@ -63,22 +67,61 @@ func advance_with_skill(skill_id: String, rng: RandomNumberGenerator) -> bool:
 		return false
 	match skill_id:
 		SKILL_SPEED:
-			speed_points += 1
+			speed_points = mini(
+				speed_points + 1,
+				maximum_skill_points(SKILL_SPEED)
+			)
 		SKILL_BUBBLE:
-			bubble_points += 1
+			bubble_points = mini(
+				bubble_points + 1,
+				maximum_skill_points(SKILL_BUBBLE)
+			)
 		SKILL_POWER:
-			power_points += 1
+			power_points = mini(
+				power_points + 1,
+				maximum_skill_points(SKILL_POWER)
+			)
 	stage_number += 1
 	_roll_ai_allocations(rng)
 	return true
 
 
 func apply_allocation(stats: ActorStats, allocation: Dictionary) -> void:
-	stats.apply_skill_points(
+	apply_character_allocation(stats, allocation, player_character_id)
+
+
+func apply_character_allocation(
+		stats: ActorStats,
+		allocation: Dictionary,
+		character_id: String
+	) -> void:
+	var definition := CharacterCatalog.get_definition(character_id)
+	stats.apply_character_skill_points(
 		int(allocation.get(SKILL_SPEED, 0)),
 		int(allocation.get(SKILL_BUBBLE, 0)),
-		int(allocation.get(SKILL_POWER, 0))
+		int(allocation.get(SKILL_POWER, 0)),
+		definition.initial_speed_points,
+		definition.initial_bubble_points,
+		definition.initial_power_points
 	)
+
+
+func maximum_skill_points(skill_id: String, character_id: String = "") -> int:
+	var resolved_id := (
+		player_character_id
+		if character_id.is_empty()
+		else CharacterCatalog.migrate_legacy_id(character_id)
+	)
+	var definition := CharacterCatalog.get_definition(resolved_id)
+	match skill_id:
+		SKILL_SPEED:
+			return GameConstants.MAX_SPEED_POINTS - definition.initial_speed_points
+		SKILL_BUBBLE:
+			return GameConstants.MAX_BUBBLES - definition.initial_bubble_points
+		SKILL_POWER:
+			return GameConstants.MAX_POWER - definition.initial_power_points
+		_:
+			return 0
 
 
 func _roll_ai_allocations(rng: RandomNumberGenerator) -> void:
@@ -97,4 +140,3 @@ func _empty_allocation() -> Dictionary:
 		SKILL_BUBBLE: 0,
 		SKILL_POWER: 0,
 	}
-

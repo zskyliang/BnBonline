@@ -6,16 +6,36 @@ Only the source files listed below are shipped.
 
 ## Background music
 
-- Shipped file: `music/battle_loop.ogg`
-- Original: `levelmusicloop-tigrun.ogg`
-- Title: “Two Simple Game Music Loops”
-- Author: qubodup
-- Source: <https://opengameart.org/content/two-simple-game-music-loops>
-- License: [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
-- Downloaded: 2026-07-26
-- Processing: copied without transcoding; Godot enables seamless forward looping
+- Shipped file: `music/puddle_jumpers_loop.ogg`
+- Original: `Puddle_Jumpers.mp3`
+- Provenance: supplied directly by the project owner
+- Received: 2026-07-27
+- Processing: decoded to 44.1 kHz stereo PCM, moved the loop boundary 1.5
+  seconds into the song, crossfaded the original ending into the opening over
+  1.4 seconds, and encoded to Ogg Vorbis. Godot also enables forward looping.
 
-The source is explicitly tagged “cute”, “hopeful”, “simple” and “seamless”.
+The processed loop is 57.5 seconds long. Rights and distribution permission
+for the user-provided original remain the responsibility of the project owner.
+
+## Gentle rain and distant thunder ambience
+
+- Shipped file: `ambience/gentle_rain_thunder_loop.ogg`
+- Original: `Light Rain Distant Thunder July 5th 2016.wav`
+- Author: kvgarlic
+- Source:
+  <https://commons.wikimedia.org/wiki/File:Light_Rain_Distant_Thunder_July_5th_2016.wav>
+- Original Freesound source:
+  <https://freesound.org/people/kvgarlic/sounds/349454/>
+- License:
+  [CC0 1.0 Universal](https://creativecommons.org/publicdomain/zero/1.0/)
+- Downloaded: 2026-07-26
+- Processing: selected a calm forest passage, high-pass filtered at 70 Hz,
+  low-pass filtered at 12 kHz, crossfaded the boundary for looping, and encoded
+  to stereo Ogg Vorbis. Runtime playback is mixed at `-19 dB` beneath the
+  battle music.
+
+The Commons description identifies this as a peaceful Midwest forest rain
+recording with distant thunder. It is used only while a match is active.
 
 ## Water-bubble cues
 

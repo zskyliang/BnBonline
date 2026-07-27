@@ -1,20 +1,24 @@
 class_name MatchSettings
 extends Resource
-## Persisted appearance and fixed-camera zoom; campaign progress stays in memory.
+## Persisted language, appearance, and fixed-camera zoom.
 
 const SAVE_PATH: String = "user://settings.cfg"
-const WEB_STORAGE_KEY: String = "bnb.settings.v6"
+const WEB_STORAGE_KEY: String = "bnb.settings.v8"
 const LEGACY_WEB_STORAGE_KEYS: Array[String] = [
+	"bnb.settings.v7",
+	"bnb.settings.v6",
 	"bnb.settings.v5",
 	"bnb.settings.v4",
 	"bnb.settings.v3",
 	"bnb.settings.v2",
 ]
+const DEFAULT_LANGUAGE_CODE: String = "en"
+const LANGUAGE_CODES: Array[String] = ["en", "zh"]
 
-const DEFAULT_CAMERA_AZIMUTH: float = -30.0
+const DEFAULT_CAMERA_AZIMUTH: float = 0.0
 const MIN_CAMERA_AZIMUTH: float = DEFAULT_CAMERA_AZIMUTH
 const MAX_CAMERA_AZIMUTH: float = DEFAULT_CAMERA_AZIMUTH
-const DEFAULT_CAMERA_ELEVATION: float = 42.0
+const DEFAULT_CAMERA_ELEVATION: float = 54.0
 const MIN_CAMERA_ELEVATION: float = DEFAULT_CAMERA_ELEVATION
 const MAX_CAMERA_ELEVATION: float = DEFAULT_CAMERA_ELEVATION
 const DEFAULT_CAMERA_ZOOM: float = 1.1
@@ -23,6 +27,7 @@ const MAX_CAMERA_ZOOM: float = 1.35
 
 var character_id: String = "cat"
 var player_color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
+var language_code: String = DEFAULT_LANGUAGE_CODE
 ## Kept as read-only compatibility fields for snapshots and external probes.
 var camera_azimuth: float = DEFAULT_CAMERA_AZIMUTH
 var camera_elevation: float = DEFAULT_CAMERA_ELEVATION
@@ -35,6 +40,8 @@ func normalize() -> void:
 		character_id = "cat"
 	if not PaintPalette.is_valid_color_id(player_color_id):
 		player_color_id = PaintPalette.DEFAULT_PLAYER_COLOR_ID
+	if language_code not in LANGUAGE_CODES:
+		language_code = DEFAULT_LANGUAGE_CODE
 	camera_azimuth = DEFAULT_CAMERA_AZIMUTH
 	camera_elevation = DEFAULT_CAMERA_ELEVATION
 	camera_zoom = clampf(camera_zoom, MIN_CAMERA_ZOOM, MAX_CAMERA_ZOOM)
@@ -48,6 +55,7 @@ func save_to_disk() -> void:
 	var config := ConfigFile.new()
 	config.set_value("appearance", "character_id", character_id)
 	config.set_value("appearance", "player_color_id", player_color_id)
+	config.set_value("localization", "language_code", language_code)
 	config.set_value("camera", "zoom", camera_zoom)
 	var error := config.save(SAVE_PATH)
 	if error != OK:
@@ -81,6 +89,11 @@ static func load_from_disk() -> MatchSettings:
 				PaintPalette.DEFAULT_PLAYER_COLOR_ID
 			)
 		)
+		settings.language_code = str(config.get_value(
+			"localization",
+			"language_code",
+			DEFAULT_LANGUAGE_CODE
+		))
 		settings.camera_zoom = float(config.get_value(
 			"camera",
 			"zoom",
@@ -95,6 +108,7 @@ func to_dictionary() -> Dictionary:
 	return {
 		"character_id": character_id,
 		"player_color_id": player_color_id,
+		"language_code": language_code,
 		"camera_zoom": camera_zoom,
 	}
 
@@ -105,6 +119,7 @@ func apply_dictionary(values: Dictionary) -> void:
 	elif values.has("zodiac_id"):
 		character_id = CharacterCatalog.migrate_zodiac_id(str(values["zodiac_id"]))
 	player_color_id = str(values.get("player_color_id", player_color_id))
+	language_code = str(values.get("language_code", language_code))
 	camera_zoom = float(values.get("camera_zoom", camera_zoom))
 	normalize()
 

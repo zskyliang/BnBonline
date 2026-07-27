@@ -2,6 +2,8 @@ class_name GameHud
 extends Control
 ## Responsive UI for paint-campaign setup, match HUD, pause, and progression.
 
+const STORYBOOK_UI_ROOT := "res://assets/art/storybook25d/ui/"
+
 signal setup_requested
 signal match_requested(configuration: Dictionary)
 signal resume_requested
@@ -18,6 +20,7 @@ signal camera_pose_requested(azimuth: float, elevation: float, zoom: float)
 signal camera_adjustment_finished
 signal settings_open_requested
 signal settings_close_requested
+signal language_changed(language_code: String)
 
 var timer_label: Label
 var fps_label: Label
@@ -38,6 +41,7 @@ var _stats_label: Label
 var _stage_label: Label
 var _hud_bubble_icon: StorybookBubbleIcon
 var _zoom_button: Button
+var _language_selector: OptionButton
 var _item_timer_label: Label
 var _item_bonus_label: Label
 var _pickup_toast: Label
@@ -55,6 +59,7 @@ var _selected_skill_id: String = ""
 var _last_scores: Array[Dictionary] = []
 var _camera_zoom: float = MatchSettings.DEFAULT_CAMERA_ZOOM
 var _pickup_toast_until_ms: int = 0
+var _last_item_countdown_seconds: int = 10
 
 
 func _ready() -> void:
@@ -101,6 +106,11 @@ func show_match() -> void:
 func sync_settings(settings: MatchSettings) -> void:
 	_selected_character_id = settings.character_id
 	_selected_color_id = settings.player_color_id
+	if is_instance_valid(_language_selector):
+		for index: int in range(_language_selector.item_count):
+			if str(_language_selector.get_item_metadata(index)) == settings.language_code:
+				_language_selector.select(index)
+				break
 	if is_instance_valid(_hud_bubble_icon):
 		_hud_bubble_icon.bubble_color = PaintPalette.get_color(_selected_color_id)
 	update_camera_pose(
@@ -114,7 +124,7 @@ func sync_settings(settings: MatchSettings) -> void:
 
 func update_campaign(progress: RunProgress) -> void:
 	if is_instance_valid(_stage_label):
-		_stage_label.text = "第 %d 关 · %d 名 AI" % [
+		_stage_label.text = tr("第 %d 关 · %d 名 AI") % [
 			progress.stage_number,
 			progress.ai_count(),
 		]
@@ -146,9 +156,9 @@ func update_player_stats(actor: GameActor) -> void:
 	if not is_instance_valid(actor):
 		return
 	var character := CharacterCatalog.get_definition(actor.character_id)
-	_stats_label.text = "%s　速度 %d　水泡 %d/%d　威力 %d" % [
-		character.display_name,
-		int(actor.stats.move_speed),
+	_stats_label.text = tr("%s　速度 %d　水泡 %d/%d　威力 %d") % [
+		tr(character.display_name),
+		actor.stats.speed_points(),
 		actor.stats.active_bubbles,
 		actor.stats.bubble_capacity,
 		actor.stats.power,
@@ -159,10 +169,11 @@ func update_player_stats(actor: GameActor) -> void:
 func update_item_countdown(seconds: int) -> void:
 	if not is_instance_valid(_item_timer_label):
 		return
+	_last_item_countdown_seconds = seconds
 	_item_timer_label.text = (
-		"下个道具 %02d 秒" % seconds
+		tr("下次 3 个道具 %02d 秒") % seconds
 		if seconds >= 0
-		else "本关道具已全部刷新"
+		else tr("本关道具已全部刷新")
 	)
 
 
@@ -170,10 +181,10 @@ func update_item_bonuses(actor: GameActor) -> void:
 	if not is_instance_valid(_item_bonus_label):
 		return
 	if not is_instance_valid(actor):
-		_item_bonus_label.text = "临时：速度 +0　水泡 +0　威力 +0"
+		_item_bonus_label.text = tr("临时：速度 +0　水泡 +0　威力 +0")
 		return
-	_item_bonus_label.text = "临时：速度 +%d　水泡 +%d　威力 +%d" % [
-		actor.stats.stage_speed_items * int(GameConstants.SPEED_PER_STAGE_ITEM),
+	_item_bonus_label.text = tr("临时：速度 +%d　水泡 +%d　威力 +%d") % [
+		actor.stats.stage_speed_items,
 		actor.stats.stage_bubble_items,
 		actor.stats.stage_power_items,
 	]
@@ -182,7 +193,7 @@ func update_item_bonuses(actor: GameActor) -> void:
 func show_item_pickup(item_type: int) -> void:
 	if not is_instance_valid(_pickup_toast):
 		return
-	_pickup_toast.text = "获得 %s！" % ArenaItemType.short_bonus(item_type)
+	_pickup_toast.text = tr("获得 %s！") % tr(ArenaItemType.short_bonus(item_type))
 	_pickup_toast.visible = true
 	_pickup_toast_until_ms = Time.get_ticks_msec() + 1400
 
@@ -203,8 +214,8 @@ func hide_pause() -> void:
 
 
 func show_result(title: String, detail: String) -> void:
-	_result_title.text = title
-	_result_detail.text = detail
+	_result_title.text = tr(title)
+	_result_detail.text = tr(detail)
 	_fill_score_box(_result_score_box, _last_scores)
 	_skill_box.visible = false
 	_next_stage_button.visible = false
@@ -220,9 +231,9 @@ func show_stage_result(
 		player_locked: int,
 		ai_locked: int
 	) -> void:
-	_result_title.text = "第 %d 关胜利！" % progress.stage_number \
-		if won else ("平局，重试本关" if player_cells == ai_cells else "AI 队领先")
-	_result_detail.text = "玩家 %d 格（锁定 %d）　AI %d 格（锁定 %d）" % [
+	_result_title.text = tr("第 %d 关胜利！") % progress.stage_number \
+		if won else (tr("平局，重试本关") if player_cells == ai_cells else tr("AI 队领先"))
+	_result_detail.text = tr("玩家 %d 格（锁定 %d）　AI %d 格（锁定 %d）") % [
 		player_cells,
 		player_locked,
 		ai_cells,
@@ -255,6 +266,28 @@ func is_settings_visible() -> bool:
 	return is_instance_valid(_settings_overlay) and _settings_overlay.visible
 
 
+func refresh_localized_text(progress: RunProgress, actor: GameActor) -> void:
+	if progress != null:
+		update_campaign(progress)
+	if is_instance_valid(actor):
+		update_player_stats(actor)
+	else:
+		update_item_bonuses(null)
+	update_item_countdown(_last_item_countdown_seconds)
+	_fill_score_box(_score_box, _last_scores)
+	if is_instance_valid(_result_score_box):
+		_fill_score_box(_result_score_box, _last_scores)
+	_refresh_character_selection()
+	_refresh_color_selection()
+	for radar: Node in find_children(
+			"*InitialStatsRadar",
+			"CharacterStatRadar",
+			true,
+			false
+		):
+		(radar as CharacterStatRadar).queue_redraw()
+
+
 func _process(_delta: float) -> void:
 	if _match_page.visible:
 		update_fps(Engine.get_frames_per_second())
@@ -276,7 +309,7 @@ func _build_lobby() -> void:
 	header_panel.size = Vector2(680, 154)
 	header_panel.add_theme_stylebox_override(
 		"panel",
-		_panel_style(Color(0.98, 0.93, 0.82, 0.91), Color("#8c6045"), 22, 2)
+		_storybook_panel_style()
 	)
 	_lobby_page.add_child(header_panel)
 	var header := VBoxContainer.new()
@@ -291,20 +324,24 @@ func _build_lobby() -> void:
 	title.add_theme_constant_override("outline_size", 3)
 	title.add_theme_color_override("font_outline_color", Color("#fff8e8"))
 	header.add_child(title)
-	var subtitle := _make_label("三分钟抢占地板，撞破敌方困泡永久锁定九宫格", 18, Color("#35585b"))
+	var subtitle := _make_label("两分钟抢占地板，撞破敌方困泡永久锁定九宫格", 18, Color("#35585b"))
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	header.add_child(subtitle)
 
 	var actions := VBoxContainer.new()
 	actions.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	actions.position = Vector2(-300, -142)
-	actions.size = Vector2(600, 124)
+	actions.position = Vector2(-300, -196)
+	actions.size = Vector2(600, 178)
 	actions.alignment = BoxContainer.ALIGNMENT_END
 	actions.add_theme_constant_override("separation", 10)
 	_lobby_page.add_child(actions)
 	var start := _make_button("开始闯关", Color("#ef6b5b"), Vector2(280, 56))
 	start.pressed.connect(setup_requested.emit)
 	actions.add_child(start)
+	var settings_button := _make_button("设置", Color("#e6a94c"), Vector2(220, 44))
+	settings_button.name = "LobbySettingsButton"
+	settings_button.pressed.connect(settings_open_requested.emit)
+	actions.add_child(settings_button)
 	if not OS.has_feature("web"):
 		var quit := _make_button("退出", Color("#4d9d9a"), Vector2(200, 44))
 		quit.pressed.connect(quit_requested.emit)
@@ -374,7 +411,7 @@ func _build_setup() -> void:
 	for color_id: String in PaintPalette.COLOR_IDS:
 		palette_grid.add_child(_make_color_button(color_id))
 	var rule := _make_label(
-		"每关 3 分钟。爆炸覆盖地板；只有接触撞破敌方困泡才会永久锁定九宫格。AI 数量随关卡增加，胜利后可选择一次属性强化。",
+		"初始属性共 6 点，速度每点对应 25px/s。每关 2 分钟；接触撞破敌方困泡会永久锁定九宫格。",
 		13,
 		Color("#6e5b50")
 	)
@@ -421,7 +458,7 @@ func _build_match_hud() -> void:
 	_stats_label = _make_label("准备中", 15, StorybookMaterialLibrary.CHARCOAL)
 	_stats_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(_stats_label)
-	timer_label = _make_label("03:00", 28, Color("#9c4436"))
+	timer_label = _make_label("02:00", 28, Color("#9c4436"))
 	timer_label.custom_minimum_size.x = 108
 	timer_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	row.add_child(timer_label)
@@ -463,7 +500,7 @@ func _build_match_hud() -> void:
 	var item_box := VBoxContainer.new()
 	item_box.add_theme_constant_override("separation", 3)
 	item_panel.add_child(item_box)
-	_item_timer_label = _make_label("下个道具 10 秒", 15, Color("#8b4037"))
+	_item_timer_label = _make_label("下次 3 个道具 10 秒", 15, Color("#8b4037"))
 	item_box.add_child(_item_timer_label)
 	_item_bonus_label = _make_label("临时：速度 +0　水泡 +0　威力 +0", 12, Color("#35585b"))
 	_item_bonus_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -506,8 +543,8 @@ func _build_settings_overlay() -> void:
 	add_child(_settings_overlay)
 	var panel := PanelContainer.new()
 	panel.set_anchors_preset(Control.PRESET_CENTER)
-	panel.position = Vector2(-270, -150)
-	panel.size = Vector2(540, 300)
+	panel.position = Vector2(-270, -180)
+	panel.size = Vector2(540, 360)
 	panel.add_theme_stylebox_override(
 		"panel",
 		_panel_style(Color("#fff6df"), Color("#5a9b98"), 22, 3)
@@ -521,7 +558,7 @@ func _build_settings_overlay() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(title)
 	var description := _make_label(
-		"固定正交镜头：方位角 -30°、俯角 42°",
+		"固定正交镜头：方位角 0°、俯角 54°",
 		14,
 		Color("#4b6767")
 	)
@@ -553,7 +590,23 @@ func _build_settings_overlay() -> void:
 	)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(hint)
-	var close := _make_button("保存并返回对局", Color("#ef6b5b"), Vector2(220, 44))
+	var language_row := HBoxContainer.new()
+	language_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	language_row.add_theme_constant_override("separation", 12)
+	content.add_child(language_row)
+	var language_title := _make_label("语言", 14, Color("#5b5048"))
+	language_row.add_child(language_title)
+	_language_selector = OptionButton.new()
+	_language_selector.name = "LanguageSelector"
+	_language_selector.custom_minimum_size = Vector2(180, 38)
+	_language_selector.add_theme_font_size_override("font_size", 16)
+	_language_selector.add_item("English")
+	_language_selector.set_item_metadata(0, "en")
+	_language_selector.add_item("中文")
+	_language_selector.set_item_metadata(1, "zh")
+	_language_selector.item_selected.connect(_on_language_selected)
+	language_row.add_child(_language_selector)
+	var close := _make_button("保存并关闭", Color("#ef6b5b"), Vector2(220, 44))
 	close.name = "SettingsCloseButton"
 	close.pressed.connect(settings_close_requested.emit)
 	content.add_child(close)
@@ -592,9 +645,9 @@ func _build_result_overlay() -> void:
 	skill_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	skill_row.add_theme_constant_override("separation", 7)
 	_skill_box.add_child(skill_row)
-	skill_row.add_child(_make_skill_button(RunProgress.SKILL_SPEED, "速度 +10"))
-	skill_row.add_child(_make_skill_button(RunProgress.SKILL_BUBBLE, "水泡 +1"))
-	skill_row.add_child(_make_skill_button(RunProgress.SKILL_POWER, "威力 +1"))
+	skill_row.add_child(_make_skill_button(RunProgress.SKILL_SPEED, "速度 +1 / 8"))
+	skill_row.add_child(_make_skill_button(RunProgress.SKILL_BUBBLE, "水泡 +1 / 10"))
+	skill_row.add_child(_make_skill_button(RunProgress.SKILL_POWER, "威力 +1 / 10"))
 	_result_content.add_child(_skill_box)
 	var buttons := HBoxContainer.new()
 	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
@@ -647,15 +700,16 @@ func _make_character_card(definition: CharacterDefinition) -> Button:
 	var button := Button.new()
 	button.name = "%sCard" % definition.id.capitalize()
 	button.toggle_mode = true
-	button.custom_minimum_size = Vector2(145, 210)
+	button.custom_minimum_size = Vector2(145, 225)
 	button.pressed.connect(_select_character.bind(definition.id))
 	_character_buttons[definition.id] = button
 	var content := VBoxContainer.new()
 	content.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 5)
+	content.add_theme_constant_override("separation", 2)
 	content.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	button.add_child(content)
 	var viewport_container := SubViewportContainer.new()
-	viewport_container.custom_minimum_size = Vector2(135, 165)
+	viewport_container.custom_minimum_size = Vector2(135, 115)
 	viewport_container.stretch = true
 	viewport_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	content.add_child(viewport_container)
@@ -666,6 +720,11 @@ func _make_character_card(definition: CharacterDefinition) -> Button:
 	var label := _make_label(definition.display_name, 14, Color("#694139"))
 	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	content.add_child(label)
+	var radar := CharacterStatRadar.new()
+	radar.name = "%sInitialStatsRadar" % definition.id.capitalize()
+	radar.custom_minimum_size = Vector2(135, 78)
+	radar.configure(definition)
+	content.add_child(radar)
 	return button
 
 
@@ -681,7 +740,8 @@ func _make_color_button(color_id: String) -> Button:
 
 
 func _make_skill_button(skill_id: String, text: String) -> Button:
-	var button := _make_button(text, Color("#d89a45"), Vector2(125, 42))
+	var button := _make_button(text, Color("#d89a45"), Vector2(145, 42))
+	button.name = "%sSkillButton" % skill_id.capitalize()
 	button.toggle_mode = true
 	button.pressed.connect(_select_skill.bind(skill_id))
 	_skill_buttons[skill_id] = button
@@ -708,6 +768,12 @@ func _select_skill(skill_id: String) -> void:
 	_next_stage_button.disabled = false
 
 
+func _on_language_selected(index: int) -> void:
+	if not is_instance_valid(_language_selector):
+		return
+	language_changed.emit(str(_language_selector.get_item_metadata(index)))
+
+
 func _confirm_skill() -> void:
 	if _selected_skill_id.is_empty():
 		return
@@ -718,9 +784,12 @@ func _refresh_character_selection() -> void:
 	if not is_instance_valid(_selected_label):
 		return
 	var definition := CharacterCatalog.get_definition(_selected_character_id)
-	_selected_label.text = "当前：%s · %s色" % [
-		definition.display_name,
-		PaintPalette.get_label(_selected_color_id),
+	_selected_label.text = tr("当前：%s · 速度%d 水泡%d 威力%d · %s色") % [
+		tr(definition.display_name),
+		definition.initial_speed_points,
+		definition.initial_bubble_points,
+		definition.initial_power_points,
+		tr(PaintPalette.get_label(_selected_color_id)),
 	]
 	for character_id: String in _character_buttons:
 		var button := _character_buttons[character_id] as Button
@@ -774,8 +843,8 @@ func _fill_score_box(box: VBoxContainer, entries: Array[Dictionary]) -> void:
 		swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		row.add_child(swatch)
 		var label := _make_label(
-			"%s　%d 格　锁定 %d" % [
-				entry.get("name", "?"),
+			tr("%s　%d 格　锁定 %d") % [
+				tr(str(entry.get("name", "?"))),
 				entry.get("cells", 0),
 				entry.get("locked", 0),
 			],
@@ -806,10 +875,26 @@ func _make_button(text: String, color: Color, minimum_size: Vector2) -> Button:
 	button.text = text
 	button.custom_minimum_size = minimum_size
 	button.add_theme_font_size_override("font_size", 17)
-	button.add_theme_color_override("font_color", Color.WHITE)
-	button.add_theme_stylebox_override("normal", _panel_style(color, color.darkened(0.18), 14, 2))
-	button.add_theme_stylebox_override("hover", _panel_style(color.lightened(0.12), color.darkened(0.12), 14, 2))
-	button.add_theme_stylebox_override("pressed", _panel_style(color.darkened(0.1), color.darkened(0.22), 14, 2))
+	button.add_theme_color_override("font_color", StorybookMaterialLibrary.CHARCOAL)
+	button.add_theme_color_override("font_hover_color", StorybookMaterialLibrary.CHARCOAL)
+	button.add_theme_color_override("font_pressed_color", StorybookMaterialLibrary.CHARCOAL)
+	button.add_theme_color_override(
+		"font_outline_color",
+		Color.WHITE.lerp(color, 0.12)
+	)
+	button.add_theme_constant_override("outline_size", 1)
+	button.add_theme_stylebox_override(
+		"normal",
+		_storybook_button_style("button_normal.png", minimum_size)
+	)
+	button.add_theme_stylebox_override(
+		"hover",
+		_storybook_button_style("button_hover.png", minimum_size)
+	)
+	button.add_theme_stylebox_override(
+		"pressed",
+		_storybook_button_style("button_pressed.png", minimum_size)
+	)
 	return button
 
 
@@ -831,4 +916,45 @@ func _panel_style(background: Color, border: Color, radius: int, border_width: i
 	style.shadow_color = Color(0.2, 0.13, 0.12, 0.18)
 	style.shadow_size = 4
 	style.shadow_offset = Vector2(0, 3)
+	return style
+
+
+func _storybook_panel_style() -> StyleBoxTexture:
+	var style := _storybook_texture_style("paper_panel.png")
+	for side: int in [
+		SIDE_LEFT,
+		SIDE_TOP,
+		SIDE_RIGHT,
+		SIDE_BOTTOM,
+	]:
+		style.set_texture_margin(side, 54.0)
+	style.set_content_margin_all(12.0)
+	return style
+
+
+func _storybook_button_style(file_name: String, minimum_size: Vector2) -> StyleBoxTexture:
+	var aspect := minimum_size.x / maxf(1.0, minimum_size.y)
+	var runtime_file := file_name
+	if aspect >= 2.4:
+		runtime_file = file_name.trim_suffix(".png") + "_wide.png"
+	var style := _storybook_texture_style(runtime_file, 0.0)
+	style.set_content_margin_all(7.0)
+	return style
+
+
+func _storybook_texture_style(
+		file_name: String,
+		texture_margin: float = 24.0
+	) -> StyleBoxTexture:
+	var style := StyleBoxTexture.new()
+	style.texture = load(STORYBOOK_UI_ROOT + file_name) as Texture2D
+	for side: int in [
+		SIDE_LEFT,
+		SIDE_TOP,
+		SIDE_RIGHT,
+		SIDE_BOTTOM,
+	]:
+		style.set_texture_margin(side, texture_margin)
+	style.set_content_margin_all(8.0)
+	style.draw_center = true
 	return style

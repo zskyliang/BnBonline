@@ -98,6 +98,9 @@ func request_ai_bomb() -> void:
 func current_cell() -> Vector2i:
 	return GameConstants.world_to_grid(position)
 
+func get_facing() -> Facing:
+	return _facing
+
 func foot_cells() -> Array[Vector2i]:
 	return GameRules.foot_cells(position)
 

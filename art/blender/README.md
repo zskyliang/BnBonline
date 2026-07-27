@@ -1,10 +1,14 @@
-# Blender MCP 资产流水线
+# Blender 历史资产归档
 
-本目录保存《森林泡泡染色战》的原创 Blender 源文件、可复现生成脚本和验收预览。
+本目录保存《森林泡泡染色战》早期方案的原创 Blender 源文件、可复现生成脚本和验收预览。
 `art/.gdignore` 阻止 Godot 导入这些创作源文件，`export_presets.cfg` 也会从 Web
 发行包排除整个 `art/` 目录。
 
-## Production v1
+自 Sprite3D Production v1 起，这些文件不再参与运行时加载或 Web 导出。
+原 `assets/models/` 已整体迁入 `legacy-runtime-glb-archive/`，仅供版本追溯；
+当前运行时位图位于 `assets/art/storybook25d/`。
+
+## Legacy Blender Production v1
 
 - `characters/`：猫、狗、兔、熊、狐狸、浣熊、企鹅、水豚的独立 `.blend`。
 - `props/`：叶片鞋、水泡葫芦、爪印爆发星。

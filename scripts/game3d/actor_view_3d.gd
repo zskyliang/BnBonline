@@ -1,40 +1,40 @@
 class_name ActorView3D
 extends Node3D
-## Read-only storybook visual and animation coordinator for one 2D logic actor.
+## Read-only four-direction ImageGen Sprite3D coordinator.
 
-const TARGET_HEIGHT := 1.3
-const TARGET_WIDTH := 1.05
 const STOP_MOTION_STEP := 1.0 / 8.0
-const WALK_CYCLE_DISTANCE := 64.0
-const MIN_WALK_PHASE_ADVANCE := 0.08
-const MAX_WALK_PHASE_ADVANCE := 0.24
 const MOVEMENT_GRACE_SECONDS := 0.12
-const LOOPING_ACTIONS: Array[StringName] = [&"Idle", &"Waddle", &"Trapped"]
-const ONE_SHOT_ACTIONS: Array[StringName] = [&"PlaceBubble", &"Victory"]
+const CONTACT_ROLL_DEGREES := 6.0
+## Dog is the approved battle-size reference. Every species reuses its
+## current pixel scale so normalized ImageGen frames read as one cast.
+const SIZE_REFERENCE_CHARACTER_ID := "dog"
+const TARGET_IDLE_CELL_WIDTH := 1.0
+const FOOT_CLEARANCE := 0.025
+const MIN_TRAP_PIXEL_SIZE := 0.00415
+const FRAME_HEIGHT_NORMALIZED_CHARACTER_ID := "penguin"
+const FRAME_HEIGHT_NORMALIZED_ACTION := &"WalkUp"
 
 var actor: GameActor
 var definition: CharacterDefinition
 var color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
 
+var _sprite_set: CharacterSpriteSet
 var _visual_pivot: Node3D
-var _model_root: Node3D
-var _animation_player: AnimationPlayer
-var _skeleton: Skeleton3D
-var _trap_sphere: MeshInstance3D
-var _resolved_animations: Dictionary = {}
-var _current_animation: StringName = &""
+var _character_sprite: Sprite3D
+var _character_material: ShaderMaterial
+var _trap_sprite: Sprite3D
+var _team_ring: MeshInstance3D
+var _contact_shadow: MeshInstance3D
 var _current_action: StringName = &"Idle"
-var _one_shot_action: StringName = &""
-var _animation_accumulator: float = 0.0
-var _animation_time: float = 0.0
-var _stop_motion_time: float = 0.0
-var _walk_cycle_phase: float = 0.0
-var _walk_distance_since_pose: float = 0.0
-var _last_direction := Vector2.DOWN
+var _current_frame := 0
+var _last_facing: StringName = &"down"
+var _animation_accumulator := 0.0
+var _stop_motion_time := 0.0
 var _last_logic_position: Vector2
-var _has_last_logic_position: bool = false
-var _movement_grace_remaining: float = 0.0
-var _is_walking: bool = false
+var _has_last_logic_position := false
+var _movement_grace_remaining := 0.0
+var _is_walking := false
+var _battle_pixel_size := 0.00265
 
 
 func bind_actor(
@@ -45,36 +45,120 @@ func bind_actor(
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	actor = logic_actor
 	definition = CharacterCatalog.get_definition(character_id)
+	_sprite_set = definition.load_sprite_set()
 	color_id = new_color_id
-	name = "%sView3D" % definition.id.capitalize()
+	name = "%sSpriteView3D" % definition.id.capitalize()
 	_build_visual()
 	if is_instance_valid(actor):
 		_last_logic_position = actor.position
 		_has_last_logic_position = true
+		_last_facing = _facing_name(actor.get_facing())
 		actor.tree_exiting.connect(queue_free, CONNECT_ONE_SHOT)
-
-
-func play_action(action: StringName) -> bool:
-	var animation_name: StringName = _resolved_animations.get(action, &"") as StringName
-	if animation_name == &"":
-		return false
-	if action in ONE_SHOT_ACTIONS:
-		_one_shot_action = action
-	_current_action = action
-	_switch_animation(animation_name)
-	return true
 
 
 func get_current_action() -> StringName:
 	return _current_action
 
 
-func get_walk_cycle_phase() -> float:
-	return _walk_cycle_phase
+func get_current_frame() -> int:
+	return _current_frame
+
+
+func get_current_facing() -> StringName:
+	return _last_facing
+
+
+func get_walk_pose_snapshot() -> Dictionary:
+	var planted_foot := &""
+	if _current_action in CharacterSpriteSet.WALK_ACTIONS:
+		if _current_frame == 0:
+			planted_foot = &"left"
+		elif _current_frame == 2:
+			planted_foot = &"right"
+	return {
+		"action": _current_action,
+		"facing": _last_facing,
+		"frame": _current_frame,
+		"planted_foot": planted_foot,
+		"body_roll_degrees": rad_to_deg(_visual_pivot.rotation.z),
+		"body_height": _visual_pivot.position.y,
+	}
+
+
+func get_min_idle_cell_width() -> float:
+	if _sprite_set == null:
+		return 0.0
+	var minimum_width := INF
+	for facing: StringName in CharacterSpriteSet.DIRECTIONS:
+		var texture := _sprite_set.texture_for(&"Idle", 0, facing)
+		var visible_width := _visible_texture_width(texture)
+		if visible_width > 0:
+			minimum_width = minf(
+				minimum_width,
+				float(visible_width) * _battle_pixel_size
+			)
+	return 0.0 if is_inf(minimum_width) else minimum_width
+
+
+func get_max_idle_cell_height() -> float:
+	if _sprite_set == null:
+		return 0.0
+	var maximum_height := 0.0
+	for facing: StringName in CharacterSpriteSet.DIRECTIONS:
+		var texture := _sprite_set.texture_for(&"Idle", 0, facing)
+		var visible_height := _visible_texture_height(texture)
+		maximum_height = maxf(
+			maximum_height,
+			float(visible_height) * _battle_pixel_size
+		)
+	return maximum_height
+
+
+func get_battle_pixel_size() -> float:
+	return _battle_pixel_size
+
+
+func get_visible_frame_cell_height() -> float:
+	if not is_instance_valid(_character_sprite) \
+			or _character_sprite.texture == null:
+		return 0.0
+	return float(_visible_texture_height(_character_sprite.texture)) \
+		* _character_sprite.pixel_size \
+		* _character_sprite.scale.y
+
+
+func get_character_feet_clearance() -> float:
+	if not is_instance_valid(_character_sprite) \
+			or _character_sprite.texture == null:
+		return -INF
+	return _character_sprite.position.y - (
+		float(_character_sprite.texture.get_height())
+		* _character_sprite.pixel_size
+		* _character_sprite.scale.y
+		* 0.5
+	)
 
 
 func has_action(action: StringName) -> bool:
-	return (_resolved_animations.get(action, &"") as StringName) != &""
+	return _sprite_set != null and _sprite_set.has_action(action)
+
+
+func set_color_id(new_color_id: String) -> void:
+	if not PaintPalette.is_valid_color_id(new_color_id):
+		return
+	color_id = new_color_id
+	if is_instance_valid(_character_material):
+		_character_material.set_shader_parameter(
+			"team_color",
+			PaintPalette.get_color(color_id)
+		)
+	if is_instance_valid(_team_ring):
+		_team_ring.material_override = StorybookMaterialLibrary.make(
+			PaintPalette.get_color(color_id),
+			0.9,
+			false,
+			0.08
+		)
 
 
 func _process(delta: float) -> void:
@@ -90,301 +174,332 @@ func _process(delta: float) -> void:
 	visible = actor.visible
 	if not visible:
 		return
-	var planar_velocity := actor.velocity
-	var can_walk := planar_velocity.length_squared() > 1.0 \
-		and not actor.stats.is_dead and not actor.stats.is_trapped
+
+	var can_walk := actor.velocity.length_squared() > 1.0 \
+		and not actor.stats.is_dead \
+		and not actor.stats.is_trapped
 	if can_walk and travelled_distance > 0.001:
-		_walk_distance_since_pose += travelled_distance
 		_movement_grace_remaining = MOVEMENT_GRACE_SECONDS
 	else:
-		_movement_grace_remaining = maxf(0.0, _movement_grace_remaining - delta)
+		_movement_grace_remaining = maxf(
+			0.0,
+			_movement_grace_remaining - delta
+		)
 	_is_walking = can_walk and (
 		travelled_distance > 0.001 or _movement_grace_remaining > 0.0
 	)
 	if _is_walking:
-		_last_direction = planar_velocity.normalized()
-		rotation.y = atan2(_last_direction.x, _last_direction.y) \
-			+ deg_to_rad(definition.yaw_offset_degrees)
-	_advance_stop_motion(delta)
-	_apply_outer_animation()
+		_last_facing = _facing_name(actor.get_facing())
 
-
-func _build_visual() -> void:
-	_visual_pivot = Node3D.new()
-	_visual_pivot.name = "CharacterPivot"
-	add_child(_visual_pivot)
-	_build_shadow()
-	_build_trap_sphere()
-	var scene := definition.load_model_scene()
-	if scene == null:
-		_build_placeholder()
-		return
-	var instance := scene.instantiate()
-	if not instance is Node3D:
-		instance.queue_free()
-		_build_placeholder()
-		return
-	_model_root = instance as Node3D
-	_model_root.name = "Model"
-	_visual_pivot.add_child(_model_root)
-	_normalize_model()
-	StorybookMaterialLibrary.apply_character_palette(
-		_model_root,
-		PaintPalette.get_color(color_id),
-		definition.team_tint_material_names
-	)
-	_find_animation_nodes(_model_root)
-	_resolve_animations()
-
-
-func _build_placeholder() -> void:
-	_model_root = Node3D.new()
-	_model_root.name = "StorybookPlaceholder"
-	_visual_pivot.add_child(_model_root)
-	var body := MeshInstance3D.new()
-	var body_mesh := CapsuleMesh.new()
-	body_mesh.radius = 0.36
-	body_mesh.height = 0.88
-	body_mesh.radial_segments = 12
-	body.mesh = body_mesh
-	body.position.y = 0.45
-	body.material_override = StorybookMaterialLibrary.make(definition.theme_color)
-	_model_root.add_child(body)
-	var head := MeshInstance3D.new()
-	var head_mesh := SphereMesh.new()
-	head_mesh.radius = 0.32
-	head_mesh.height = 0.64
-	head_mesh.radial_segments = 12
-	head_mesh.rings = 6
-	head.mesh = head_mesh
-	head.position.y = 1.0
-	head.scale = Vector3(1.08, 0.95, 1.0)
-	head.material_override = StorybookMaterialLibrary.make(definition.accent_color)
-	_model_root.add_child(head)
-
-
-func _build_shadow() -> void:
-	var shadow := MeshInstance3D.new()
-	shadow.name = "ContactShadow"
-	var mesh := CylinderMesh.new()
-	mesh.top_radius = 0.4
-	mesh.bottom_radius = 0.4
-	mesh.height = 0.012
-	mesh.radial_segments = 20
-	shadow.mesh = mesh
-	shadow.position.y = 0.01
-	var material := StandardMaterial3D.new()
-	material.albedo_color = Color(0.12, 0.1, 0.11, 0.24)
-	material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	shadow.material_override = material
-	_visual_pivot.add_child(shadow)
-
-
-func _build_trap_sphere() -> void:
-	_trap_sphere = MeshInstance3D.new()
-	_trap_sphere.name = "TrapBubble"
-	var sphere := SphereMesh.new()
-	sphere.radius = 0.67
-	sphere.height = 1.34
-	sphere.radial_segments = 20
-	sphere.rings = 10
-	_trap_sphere.mesh = sphere
-	_trap_sphere.position.y = 0.67
-	_trap_sphere.scale = Vector3(1.04, 0.96, 0.98)
-	var bubble_material := StandardMaterial3D.new()
-	bubble_material.albedo_color = Color(0.62, 0.88, 0.92, 0.23)
-	bubble_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	bubble_material.metallic = 0.0
-	bubble_material.metallic_specular = 0.12
-	bubble_material.roughness = 0.18
-	var ink_outline := StandardMaterial3D.new()
-	ink_outline.albedo_color = Color(0.16, 0.29, 0.31, 0.58)
-	ink_outline.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	ink_outline.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	ink_outline.cull_mode = BaseMaterial3D.CULL_FRONT
-	ink_outline.grow = true
-	ink_outline.grow_amount = 0.018
-	bubble_material.next_pass = ink_outline
-	_trap_sphere.material_override = bubble_material
-	_trap_sphere.visible = false
-	add_child(_trap_sphere)
-
-
-func _normalize_model() -> void:
-	var bounds := _calculate_bounds(_model_root)
-	if bounds.size.y <= 0.001:
-		return
-	var horizontal_size := maxf(bounds.size.x, bounds.size.z)
-	var normalization_scale := minf(
-		TARGET_HEIGHT / bounds.size.y,
-		TARGET_WIDTH / maxf(horizontal_size, 0.001)
-	) * definition.scale_multiplier
-	_model_root.scale = Vector3.ONE * normalization_scale
-	_model_root.position.y = -bounds.position.y * normalization_scale
-	_model_root.rotation_degrees.y = definition.yaw_offset_degrees
-
-
-func _calculate_bounds(root: Node3D) -> AABB:
-	var minimum := Vector3(INF, INF, INF)
-	var maximum := Vector3(-INF, -INF, -INF)
-	var found := false
-	var root_inverse := root.global_transform.affine_inverse()
-	for node: Node in root.find_children("*", "MeshInstance3D", true, false):
-		var mesh_instance := node as MeshInstance3D
-		if mesh_instance.mesh == null:
-			continue
-		var box := mesh_instance.get_aabb()
-		var relative := root_inverse * mesh_instance.global_transform
-		for x: float in [box.position.x, box.end.x]:
-			for y: float in [box.position.y, box.end.y]:
-				for z: float in [box.position.z, box.end.z]:
-					var corner := relative * Vector3(x, y, z)
-					minimum = minimum.min(corner)
-					maximum = maximum.max(corner)
-					found = true
-	if not found:
-		return AABB(Vector3.ZERO, Vector3.ONE)
-	return AABB(minimum, maximum - minimum)
-
-
-func _find_animation_nodes(root: Node) -> void:
-	if root is AnimationPlayer and not is_instance_valid(_animation_player):
-		_animation_player = root as AnimationPlayer
-	if root is Skeleton3D and not is_instance_valid(_skeleton):
-		_skeleton = root as Skeleton3D
-	for child: Node in root.get_children():
-		_find_animation_nodes(child)
-
-
-func _resolve_animations() -> void:
-	if not is_instance_valid(_animation_player):
-		return
-	_resolved_animations = {
-		&"Idle": _find_animation(definition.idle_animation_aliases),
-		&"Waddle": _find_animation(definition.move_animation_aliases),
-		&"PlaceBubble": _find_animation(definition.place_bubble_animation_aliases),
-		&"Trapped": _find_animation(definition.trapped_animation_aliases),
-		&"Defeat": _find_animation(definition.defeat_animation_aliases),
-		&"Victory": _find_animation(definition.victory_animation_aliases),
-	}
-	if (_resolved_animations[&"Idle"] as StringName) == &"":
-		_resolved_animations[&"Idle"] = _resolved_animations[&"Waddle"]
-	if (_resolved_animations[&"Waddle"] as StringName) == &"":
-		_resolved_animations[&"Waddle"] = _resolved_animations[&"Idle"]
-	_animation_player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
-	_switch_animation(_resolved_animations[&"Idle"] as StringName)
-
-
-func _find_animation(aliases: Array[String]) -> StringName:
-	for alias: String in aliases:
-		for animation_name: StringName in _animation_player.get_animation_list():
-			var normalized := String(animation_name).to_lower()
-			if normalized.ends_with(alias.to_lower()) or normalized.contains(alias.to_lower()):
-				return animation_name
-	return &""
-
-
-func _desired_action() -> StringName:
-	if actor.stats.is_dead and has_action(&"Defeat"):
-		return &"Defeat"
-	if actor.stats.is_trapped and has_action(&"Trapped"):
-		return &"Trapped"
-	if _one_shot_action != &"":
-		return _one_shot_action
-	if _is_walking:
-		return &"Waddle"
-	return &"Idle"
-
-
-func _advance_stop_motion(delta: float) -> void:
-	if not is_instance_valid(_animation_player):
-		return
 	_animation_accumulator += minf(delta, STOP_MOTION_STEP * 3.0)
 	while _animation_accumulator >= STOP_MOTION_STEP:
 		_animation_accumulator -= STOP_MOTION_STEP
 		_stop_motion_time += STOP_MOTION_STEP
-		var desired := _desired_action()
-		var desired_animation: StringName = _resolved_animations.get(desired, &"") as StringName
-		if desired_animation == &"":
-			desired = &"Idle"
-			desired_animation = _resolved_animations.get(desired, &"") as StringName
-		if desired != _current_action or desired_animation != _current_animation:
-			_current_action = desired
-			_switch_animation(desired_animation)
-		if _current_action == &"Waddle" and _is_walking:
-			_advance_walk_pose()
-		elif _current_action in LOOPING_ACTIONS:
-			_advance_looped_pose(STOP_MOTION_STEP)
+		var desired_action := _desired_action()
+		if desired_action != _current_action:
+			_set_action(desired_action)
+		elif desired_action in CharacterSpriteSet.WALK_ACTIONS:
+			_current_frame = (
+				_current_frame + 1
+			) % CharacterSpriteSet.WALK_FRAME_COUNT
+			_apply_frame_texture()
+		_apply_stop_motion_pose()
+
+	_apply_visibility_state()
+
+
+func _build_visual() -> void:
+	_battle_pixel_size = _calculate_battle_pixel_size()
+	_visual_pivot = Node3D.new()
+	_visual_pivot.name = "DirectionalPaperPuppetPivot"
+	add_child(_visual_pivot)
+	_build_contact_shadow()
+	_build_team_ring()
+
+	_character_sprite = Sprite3D.new()
+	_character_sprite.name = "ImageGenDirectionalCharacterSprite"
+	_character_sprite.centered = true
+	_character_sprite.pixel_size = _battle_pixel_size
+	StorybookMaterialLibrary.configure_billboard(_character_sprite)
+	_visual_pivot.add_child(_character_sprite)
+
+	_trap_sprite = Sprite3D.new()
+	_trap_sprite.name = "TrapBubbleSprite"
+	var trap_texture := load(
+		"res://assets/art/storybook25d/effects/trap_bubble.png"
+	) as Texture2D
+	_trap_sprite.texture = trap_texture
+	_trap_sprite.centered = true
+	_trap_sprite.pixel_size = maxf(
+		MIN_TRAP_PIXEL_SIZE,
+		_battle_pixel_size * 1.08
+	)
+	_trap_sprite.position = Vector3(
+		0.0,
+		_grounded_center_height(
+			trap_texture,
+			_trap_sprite.pixel_size
+		),
+		-0.015
+	)
+	_trap_sprite.modulate = Color(1.0, 1.0, 1.0, 0.82)
+	StorybookMaterialLibrary.configure_billboard(_trap_sprite, true)
+	_trap_sprite.visible = false
+	_visual_pivot.add_child(_trap_sprite)
+	_set_action(&"Idle", true)
+
+
+func _calculate_battle_pixel_size() -> float:
+	var reference_definition := CharacterCatalog.get_definition(
+		SIZE_REFERENCE_CHARACTER_ID
+	)
+	var reference_sprite_set := reference_definition.load_sprite_set()
+	if reference_sprite_set == null:
+		return _sprite_set.pixel_size if _sprite_set != null else 0.00265
+	var narrowest_idle_width := _narrowest_idle_visible_width(
+		reference_sprite_set
+	)
+	if narrowest_idle_width <= 0:
+		return reference_sprite_set.pixel_size
+	return maxf(
+		reference_sprite_set.pixel_size,
+		TARGET_IDLE_CELL_WIDTH / float(narrowest_idle_width)
+	)
+
+
+func _narrowest_idle_visible_width(
+		sprite_set: CharacterSpriteSet
+	) -> int:
+	if sprite_set == null:
+		return 0
+	var narrowest_idle_width := 0
+	for facing: StringName in CharacterSpriteSet.DIRECTIONS:
+		var texture := sprite_set.texture_for(&"Idle", 0, facing)
+		var visible_width := _visible_texture_width(texture)
+		if visible_width <= 0:
+			continue
+		if narrowest_idle_width == 0:
+			narrowest_idle_width = visible_width
 		else:
-			_advance_one_shot_or_held_pose(STOP_MOTION_STEP)
+			narrowest_idle_width = mini(narrowest_idle_width, visible_width)
+	return narrowest_idle_width
 
 
-func _switch_animation(animation_name: StringName) -> void:
-	if animation_name == &"" or not is_instance_valid(_animation_player):
+func _visible_texture_width(texture: Texture2D) -> int:
+	if texture == null:
+		return 0
+	var image := texture.get_image()
+	if image == null:
+		return texture.get_width()
+	return image.get_used_rect().size.x
+
+
+func _visible_texture_height(texture: Texture2D) -> int:
+	if texture == null:
+		return 0
+	var image := texture.get_image()
+	if image == null:
+		return texture.get_height()
+	return image.get_used_rect().size.y
+
+
+func _frame_vertical_scale(
+		texture: Texture2D,
+		frame_facing: StringName
+	) -> float:
+	if definition == null \
+			or definition.id != FRAME_HEIGHT_NORMALIZED_CHARACTER_ID \
+			or _current_action != FRAME_HEIGHT_NORMALIZED_ACTION:
+		return 1.0
+	var reference := _sprite_set.texture_for(&"Idle", 0, frame_facing)
+	var reference_height := _visible_texture_height(reference)
+	var frame_height := _visible_texture_height(texture)
+	if reference_height <= 0 or frame_height <= 0:
+		return 1.0
+	return float(reference_height) / float(frame_height)
+
+
+func _grounded_center_height(
+		texture: Texture2D,
+		pixel_size: float,
+		vertical_scale: float = 1.0
+	) -> float:
+	if texture == null:
+		return FOOT_CLEARANCE
+	return float(texture.get_height()) \
+		* pixel_size \
+		* vertical_scale \
+		* 0.5 \
+		+ FOOT_CLEARANCE
+
+
+func _build_contact_shadow() -> void:
+	_contact_shadow = MeshInstance3D.new()
+	_contact_shadow.name = "ContactShadow"
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 0.38
+	mesh.bottom_radius = 0.38
+	mesh.height = 0.008
+	mesh.radial_segments = 20
+	_contact_shadow.mesh = mesh
+	_contact_shadow.position.y = 0.006
+	_contact_shadow.material_override = StorybookMaterialLibrary.make(
+		Color(0.16, 0.12, 0.1, 0.22)
+	)
+	add_child(_contact_shadow)
+
+
+func _build_team_ring() -> void:
+	_team_ring = MeshInstance3D.new()
+	_team_ring.name = "TeamColorRing"
+	var mesh := TorusMesh.new()
+	mesh.inner_radius = 0.39
+	mesh.outer_radius = 0.435
+	mesh.rings = 16
+	mesh.ring_segments = 28
+	_team_ring.mesh = mesh
+	_team_ring.position.y = 0.012
+	_team_ring.material_override = StorybookMaterialLibrary.make(
+		PaintPalette.get_color(color_id),
+		0.9,
+		false,
+		0.08
+	)
+	_team_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_team_ring)
+
+
+func _desired_action() -> StringName:
+	if actor.stats.is_trapped:
+		return &"Trapped"
+	if actor.stats.is_dead:
+		return &"Idle"
+	if not _is_walking:
+		return &"Idle"
+	match _last_facing:
+		&"up":
+			return &"WalkUp"
+		&"left":
+			return &"WalkLeft"
+		&"right":
+			return &"WalkRight"
+		_:
+			return &"WalkDown"
+
+
+func _set_action(action: StringName, force: bool = false) -> void:
+	if not force and action == _current_action:
 		return
-	_current_animation = animation_name
-	_animation_time = 0.0
-	_animation_player.play(animation_name, 0.0)
-	_animation_player.seek(0.0, true)
-	_animation_player.advance(0.0)
+	_current_action = action
+	_current_frame = 0
+	_apply_frame_texture()
 
 
-func _advance_walk_pose() -> void:
-	if _walk_distance_since_pose > 0.001:
-		var phase_advance := clampf(
-			_walk_distance_since_pose / WALK_CYCLE_DISTANCE,
-			MIN_WALK_PHASE_ADVANCE,
-			MAX_WALK_PHASE_ADVANCE
+func _apply_frame_texture() -> void:
+	if not is_instance_valid(_character_sprite) or _sprite_set == null:
+		return
+	var frame_facing := &"down" if _current_action == &"Trapped" else _last_facing
+	var texture := _sprite_set.texture_for(
+		_current_action,
+		_current_frame,
+		frame_facing
+	)
+	var mask := _sprite_set.mask_for(
+		_current_action,
+		_current_frame,
+		frame_facing
+	)
+	if texture == null or mask == null:
+		return
+	_character_sprite.texture = texture
+	var vertical_scale := _frame_vertical_scale(texture, frame_facing)
+	_character_sprite.scale = Vector3(1.0, vertical_scale, 1.0)
+	_character_sprite.position.y = _grounded_center_height(
+		texture,
+		_character_sprite.pixel_size,
+		vertical_scale
+	)
+	if not is_instance_valid(_character_material):
+		_character_material = StorybookMaterialLibrary.make_sprite_material(
+			texture,
+			mask,
+			PaintPalette.get_color(color_id)
 		)
-		_walk_cycle_phase = fposmod(_walk_cycle_phase + phase_advance, 1.0)
-		_walk_distance_since_pose = 0.0
-	var animation := _animation_player.get_animation(_current_animation)
-	if animation == null or animation.length <= 0.001:
-		return
-	_animation_player.seek(_walk_cycle_phase * animation.length, true)
-	_animation_player.advance(0.0)
+		_character_sprite.material_override = _character_material
+	else:
+		_character_material.set_shader_parameter("base_texture", texture)
+		_character_material.set_shader_parameter("tint_mask", mask)
 
 
-func _advance_looped_pose(step: float) -> void:
-	var animation := _animation_player.get_animation(_current_animation)
-	if animation == null or animation.length <= 0.001:
-		return
-	_animation_time = fposmod(_animation_time + step, animation.length)
-	_animation_player.seek(_animation_time, true)
-	_animation_player.advance(0.0)
+func _apply_stop_motion_pose() -> void:
+	var bob := 0.0
+	var roll := 0.0
+	var squash := 1.0
+	var screen_shift := 0.0
+	if _current_action in CharacterSpriteSet.WALK_ACTIONS:
+		match _current_frame:
+			0:
+				bob = 0.02
+				roll = deg_to_rad(CONTACT_ROLL_DEGREES)
+				squash = 0.98
+				screen_shift = 0.045
+			1:
+				bob = 0.07
+				roll = deg_to_rad(2.0)
+				squash = 1.025
+				screen_shift = 0.015
+			2:
+				bob = 0.02
+				roll = -deg_to_rad(CONTACT_ROLL_DEGREES)
+				squash = 0.98
+				screen_shift = -0.045
+			3:
+				bob = 0.07
+				roll = -deg_to_rad(2.0)
+				squash = 1.025
+				screen_shift = -0.015
+	elif _current_action == &"Trapped":
+		bob = 0.1 + sin(_stop_motion_time * 5.0) * 0.045
+		roll = sin(_stop_motion_time * 4.0) * 0.045
+	else:
+		bob = sin(_stop_motion_time * 2.25) * 0.012
+		squash = 1.0 + sin(_stop_motion_time * 2.25) * 0.008
 
-
-func _advance_one_shot_or_held_pose(step: float) -> void:
-	var animation := _animation_player.get_animation(_current_animation)
-	if animation == null or animation.length <= 0.001:
-		_one_shot_action = &""
-		return
-	_animation_time = minf(_animation_time + step, animation.length)
-	_animation_player.seek(_animation_time, true)
-	_animation_player.advance(0.0)
-	if _current_action in ONE_SHOT_ACTIONS and _animation_time >= animation.length:
-		_one_shot_action = &""
-
-
-func _apply_outer_animation() -> void:
-	_trap_sphere.visible = actor.stats.is_trapped
+	_visual_pivot.position = Vector3(screen_shift, bob, 0.0)
+	_visual_pivot.rotation.z = roll
+	_visual_pivot.scale = Vector3(2.0 - squash, squash, 1.0)
+	_contact_shadow.scale = Vector3(
+		1.0 + bob * 0.45,
+		1.0,
+		1.0 + bob * 0.45
+	)
+	_trap_sprite.visible = actor.stats.is_trapped
 	if actor.stats.is_trapped:
 		var trap_color_id: String = actor.color_id
 		if is_instance_valid(actor.last_attacker):
 			trap_color_id = actor.last_attacker.color_id
 		var trap_color := PaintPalette.get_color(trap_color_id)
-		var trap_material := _trap_sphere.material_override as StandardMaterial3D
-		if trap_material != null:
-			trap_material.albedo_color = Color(trap_color, 0.24)
-	var bob := 0.0
-	if actor.stats.is_trapped:
-		bob = sin(_stop_motion_time * 5.2) * 0.06 + 0.12
-	elif _is_walking:
-		bob = absf(sin(_walk_cycle_phase * TAU)) * 0.018
-	elif _one_shot_action == &"" and not actor.stats.is_dead:
-		bob = sin(_stop_motion_time * 2.4) * 0.012
-	_visual_pivot.position.y = bob
+		_trap_sprite.modulate = Color(
+			lerpf(1.0, trap_color.r, 0.22),
+			lerpf(1.0, trap_color.g, 0.22),
+			lerpf(1.0, trap_color.b, 0.22),
+			0.86
+		)
+
+
+func _facing_name(facing: GameActor.Facing) -> StringName:
+	match facing:
+		GameActor.Facing.UP:
+			return &"up"
+		GameActor.Facing.LEFT:
+			return &"left"
+		GameActor.Facing.RIGHT:
+			return &"right"
+		_:
+			return &"down"
+
+
+func _apply_visibility_state() -> void:
 	if actor.stats.is_invincible() and not actor.stats.is_dead:
 		_visual_pivot.visible = int(Time.get_ticks_msec() / 90) % 2 == 0
 	else:

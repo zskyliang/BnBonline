@@ -5,7 +5,7 @@ extends RefCounted
 enum Value { SPEED, BUBBLE, POWER }
 
 const ALL: Array[Value] = [Value.SPEED, Value.BUBBLE, Value.POWER]
-const MODEL_ROOT: String = "res://assets/models/items/storybook/"
+const TEXTURE_ROOT: String = "res://assets/art/storybook25d/items/"
 
 
 static func is_valid(item_type: int) -> bool:
@@ -27,7 +27,7 @@ static func display_name(item_type: int) -> String:
 static func short_bonus(item_type: int) -> String:
 	match item_type:
 		Value.SPEED:
-			return "速度 +25"
+			return "速度 +1"
 		Value.BUBBLE:
 			return "水泡数 +1"
 		Value.POWER:
@@ -36,14 +36,14 @@ static func short_bonus(item_type: int) -> String:
 			return ""
 
 
-static func model_path(item_type: int) -> String:
+static func texture_path(item_type: int) -> String:
 	match item_type:
 		Value.SPEED:
-			return MODEL_ROOT + "leaf_shoes.glb"
+			return TEXTURE_ROOT + "leaf_shoes.png"
 		Value.BUBBLE:
-			return MODEL_ROOT + "bubble_gourd.glb"
+			return TEXTURE_ROOT + "bubble_gourd.png"
 		Value.POWER:
-			return MODEL_ROOT + "paw_burst.glb"
+			return TEXTURE_ROOT + "paw_burst.png"
 		_:
 			return ""
 

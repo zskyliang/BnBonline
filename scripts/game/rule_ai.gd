@@ -15,6 +15,7 @@ const DANGER_REACTION_MS: int = 1200
 const BOMB_COOLDOWN_MS: int = AITemporalPlanner.WAIT_STEP_MS * 2
 const TARGET_LOCK_MS: int = 1200
 const PRESSURE_TARGET_LOCK_MS: int = 5200
+const TRAPPED_PLAYER_CHASE_MAX_MS: int = 9500
 const MAX_PRESSURE_CANDIDATES: int = 2
 const MAX_SAFE_PRESSURE_CHOICES: int = 1
 const MAX_STATIC_THREAT_CANDIDATES: int = 24
@@ -199,6 +200,16 @@ func _think() -> void:
 			_set_debug(Mode.EVADING, current, -1000.0)
 		_finish_decision(started_usec)
 		return
+	var trapped_player_interaction: Dictionary = _find_interaction_decision(
+		snapshot,
+		self_state,
+		forecast
+	)
+	if not trapped_player_interaction.is_empty():
+		_clear_pressure_target()
+		_commit_decision(trapped_player_interaction, Mode.INTERACTING)
+		_finish_decision(started_usec)
+		return
 	if current_mode == Mode.EVADING and _remaining_plan_is_safe(forecast, true):
 		_set_debug(Mode.EVADING, _plan.target_cell(), last_decision_score)
 		_finish_decision(started_usec)
@@ -220,36 +231,19 @@ func _think() -> void:
 		_finish_decision(started_usec)
 		return
 	var paint_decision: Dictionary = _find_paint_decision(snapshot, self_state, forecast)
-	var interaction: Dictionary = _find_interaction_decision(snapshot, self_state, forecast)
-	var selected_kind: String = ""
-	var selected_score: float = -INF
-	for candidate: Dictionary in [
-		{"kind": "paint", "decision": paint_decision},
-		{"kind": "interaction", "decision": interaction},
-	]:
-		var decision: Dictionary = candidate["decision"] as Dictionary
-		if decision.is_empty() or float(decision.get("score", -INF)) <= selected_score:
-			continue
-		selected_kind = str(candidate["kind"])
-		selected_score = float(decision["score"])
-	match selected_kind:
-		"interaction":
-			_commit_decision(interaction, Mode.INTERACTING)
-			_finish_decision(started_usec)
-			return
-		"paint":
-			if bool(paint_decision.get("drop", false)):
-				_drop_bomb_and_escape(
-					snapshot,
-					self_state,
-					Mode.PAINTING,
-					float(paint_decision["score"]),
-					paint_decision.get("escape") as AITemporalPlanner.TimedPlan
-				)
-			else:
-				_commit_decision(paint_decision, Mode.PAINTING)
-			_finish_decision(started_usec)
-			return
+	if not paint_decision.is_empty():
+		if bool(paint_decision.get("drop", false)):
+			_drop_bomb_and_escape(
+				snapshot,
+				self_state,
+				Mode.PAINTING,
+				float(paint_decision["score"]),
+				paint_decision.get("escape") as AITemporalPlanner.TimedPlan
+			)
+		else:
+			_commit_decision(paint_decision, Mode.PAINTING)
+		_finish_decision(started_usec)
+		return
 	var target: AIBattleSnapshot.ActorState = _find_enemy(snapshot, self_state)
 	var continuing_pressure: bool = target != null and _pressure_intent_is_active(self_state)
 	if continuing_pressure:
@@ -385,15 +379,21 @@ func _find_interaction_decision(
 		if other.instance_id == self_state.instance_id \
 			or other.team_id == self_state.team_id \
 			or other.is_dead \
-			or not other.is_trapped:
+			or not other.is_trapped \
+			or not other.is_player:
 			continue
 		var plan: AITemporalPlanner.TimedPlan = AITemporalPlanner.find_path(
-			snapshot, forecast, self_state.cell, other.cell, self_state.move_speed, 5000, 750
+			snapshot,
+			forecast,
+			self_state.cell,
+			other.cell,
+			self_state.move_speed,
+			TRAPPED_PLAYER_CHASE_MAX_MS,
+			750
 		)
 		if not plan.valid:
 			continue
-		var score: float = 300.0 - float(plan.travel_ms()) / 10.0
-		score += 80.0
+		var score: float = 10000.0 - float(plan.travel_ms()) / 10.0
 		if score > best_score:
 			best_score = score
 			best = {"plan": plan, "cell": other.cell, "score": score}

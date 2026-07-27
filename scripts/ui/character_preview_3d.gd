@@ -1,12 +1,17 @@
 class_name CharacterPreview3D
 extends SubViewport
+## Orthographic lobby preview using the same production Sprite3D as battle.
+
+const STOP_MOTION_STEP := 1.0 / 8.0
 
 var definition: CharacterDefinition
 var color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
-var _model_root: Node3D
-var _animation_player: AnimationPlayer
+var _sprite_set: CharacterSpriteSet
+var _character_sprite: Sprite3D
+var _visual_pivot: Node3D
+var _team_ring: MeshInstance3D
 var _animation_accumulator := 0.0
-const STOP_MOTION_STEP := 1.0 / 8.0
+var _animation_time := 0.0
 
 
 func setup(
@@ -15,76 +20,59 @@ func setup(
 	) -> void:
 	definition = character_definition
 	color_id = new_color_id
+	_sprite_set = definition.load_sprite_set()
 	size = Vector2i(256, 192)
 	own_world_3d = true
 	transparent_bg = true
 	render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	msaa_3d = Viewport.MSAA_DISABLED if OS.has_feature("web") else Viewport.MSAA_2X
+	msaa_3d = Viewport.MSAA_DISABLED
 
 	var world := Node3D.new()
-	world.name = "StorybookPreviewWorld"
+	world.name = "StorybookSpritePreviewWorld"
 	add_child(world)
-	var model_scene := definition.load_model_scene()
-	if model_scene != null:
-		var model := model_scene.instantiate() as Node3D
-		if model != null:
-			_model_root = model
-			world.add_child(model)
-			_normalize_model(model)
-			_apply_palette()
-			_animation_player = _find_animation_player(model)
-			_start_idle_animation()
-	else:
-		_add_placeholder(world)
+	_visual_pivot = Node3D.new()
+	_visual_pivot.name = "PreviewPaperPuppet"
+	world.add_child(_visual_pivot)
 
-	var ground := MeshInstance3D.new()
-	var ground_mesh := CylinderMesh.new()
-	ground_mesh.top_radius = 0.68
-	ground_mesh.bottom_radius = 0.72
-	ground_mesh.height = 0.08
-	ground_mesh.radial_segments = 20
-	ground.mesh = ground_mesh
-	ground.position.y = -0.04
-	ground.material_override = StorybookMaterialLibrary.make(
-		PaintPalette.get_color(color_id).lightened(0.62),
-		0.94,
-		false
-	)
-	world.add_child(ground)
+	_character_sprite = Sprite3D.new()
+	_character_sprite.name = "ImageGenPreviewSprite"
+	_character_sprite.texture = _sprite_set.texture_for(&"Idle")
+	_character_sprite.pixel_size = _sprite_set.pixel_size
+	_character_sprite.position.y = _sprite_set.ground_offset
+	StorybookMaterialLibrary.configure_billboard(_character_sprite)
+	_visual_pivot.add_child(_character_sprite)
+	_apply_palette()
 
-	var light := DirectionalLight3D.new()
-	light.rotation_degrees = Vector3(-48.0, -28.0, 0.0)
-	light.light_color = Color("#ffe8c7")
-	light.light_energy = 1.18
-	light.shadow_enabled = false
-	world.add_child(light)
-
-	var environment_node := WorldEnvironment.new()
-	var environment := Environment.new()
-	environment.background_mode = Environment.BG_COLOR
-	environment.background_color = Color(0, 0, 0, 0)
-	environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.ambient_light_color = Color("#f4e7d1")
-	environment.ambient_light_energy = 0.42
-	environment_node.environment = environment
-	world.add_child(environment_node)
+	_team_ring = MeshInstance3D.new()
+	_team_ring.name = "PreviewTeamRing"
+	var ring_mesh := TorusMesh.new()
+	ring_mesh.inner_radius = 0.38
+	ring_mesh.outer_radius = 0.43
+	ring_mesh.rings = 16
+	ring_mesh.ring_segments = 28
+	_team_ring.mesh = ring_mesh
+	_team_ring.position.y = 0.01
+	world.add_child(_team_ring)
+	_apply_ring_color()
 
 	var camera := Camera3D.new()
+	camera.name = "PreviewCamera"
 	camera.projection = Camera3D.PROJECTION_ORTHOGONAL
-	camera.size = 1.48
-	camera.position = Vector3(1.45, 1.15, 3.0)
-	camera.look_at_from_position(camera.position, Vector3(0.0, 0.62, 0.0))
+	camera.size = 1.55
+	camera.look_at_from_position(Vector3(0.0, 0.68, 3.0), Vector3(0.0, 0.68, 0.0))
 	camera.current = true
 	world.add_child(camera)
 
 
 func _process(delta: float) -> void:
-	if not is_instance_valid(_animation_player):
+	if not is_instance_valid(_visual_pivot):
 		return
 	_animation_accumulator += minf(delta, STOP_MOTION_STEP * 3.0)
 	while _animation_accumulator >= STOP_MOTION_STEP:
 		_animation_accumulator -= STOP_MOTION_STEP
-		_animation_player.advance(STOP_MOTION_STEP)
+		_animation_time += STOP_MOTION_STEP
+		_visual_pivot.position.y = sin(_animation_time * 2.2) * 0.012
+		_visual_pivot.rotation.z = sin(_animation_time * 1.65) * 0.012
 
 
 func set_color_id(new_color_id: String) -> void:
@@ -92,88 +80,27 @@ func set_color_id(new_color_id: String) -> void:
 		return
 	color_id = new_color_id
 	_apply_palette()
+	_apply_ring_color()
 
 
 func _apply_palette() -> void:
-	if not is_instance_valid(_model_root):
+	if not is_instance_valid(_character_sprite) or _sprite_set == null:
 		return
-	StorybookMaterialLibrary.apply_character_palette(
-		_model_root,
-		PaintPalette.get_color(color_id),
-		definition.team_tint_material_names
+	var texture := _sprite_set.texture_for(&"Idle")
+	var mask := _sprite_set.mask_for(&"Idle")
+	_character_sprite.material_override = StorybookMaterialLibrary.make_sprite_material(
+		texture,
+		mask,
+		PaintPalette.get_color(color_id)
 	)
 
 
-func _normalize_model(model: Node3D) -> void:
-	var bounds := _calculate_bounds(model)
-	var horizontal := maxf(bounds.size.x, bounds.size.z)
-	if bounds.size.y <= 0.001 or horizontal <= 0.001:
+func _apply_ring_color() -> void:
+	if not is_instance_valid(_team_ring):
 		return
-	var model_scale := minf(1.3 / bounds.size.y, 1.05 / horizontal)
-	model.scale = Vector3.ONE * model_scale
-	model.position.y = -bounds.position.y * model_scale
-	model.rotation_degrees.y = definition.yaw_offset_degrees
-
-
-func _calculate_bounds(root: Node3D) -> AABB:
-	var minimum := Vector3(INF, INF, INF)
-	var maximum := Vector3(-INF, -INF, -INF)
-	var found := false
-	var stack: Array[Dictionary] = [{"node": root, "transform": Transform3D.IDENTITY}]
-	while not stack.is_empty():
-		var item: Dictionary = stack.pop_back()
-		var current := item["node"] as Node3D
-		var current_transform := item["transform"] as Transform3D
-		if current != root:
-			current_transform = current_transform * current.transform
-		if current is MeshInstance3D and (current as MeshInstance3D).mesh != null:
-			var box := (current as MeshInstance3D).get_aabb()
-			for x in [box.position.x, box.end.x]:
-				for y in [box.position.y, box.end.y]:
-					for z in [box.position.z, box.end.z]:
-						var point := current_transform * Vector3(x, y, z)
-						minimum = minimum.min(point)
-						maximum = maximum.max(point)
-						found = true
-		for child in current.get_children():
-			if child is Node3D:
-				stack.append({"node": child, "transform": current_transform})
-	if not found:
-		return AABB(Vector3.ZERO, Vector3.ONE)
-	return AABB(minimum, maximum - minimum)
-
-
-func _find_animation_player(root: Node) -> AnimationPlayer:
-	if root is AnimationPlayer:
-		return root as AnimationPlayer
-	for child in root.get_children():
-		var found := _find_animation_player(child)
-		if found != null:
-			return found
-	return null
-
-
-func _start_idle_animation() -> void:
-	if not is_instance_valid(_animation_player):
-		return
-	for alias in definition.idle_animation_aliases:
-		for animation_name in _animation_player.get_animation_list():
-			if String(animation_name).to_lower().contains(alias.to_lower()):
-				_animation_player.callback_mode_process = AnimationMixer.ANIMATION_CALLBACK_MODE_PROCESS_MANUAL
-				_animation_player.play(animation_name, 0.0)
-				_animation_player.advance(0.0)
-				return
-
-
-func _add_placeholder(parent: Node3D) -> void:
-	var mesh_instance := MeshInstance3D.new()
-	var mesh := CapsuleMesh.new()
-	mesh.radius = 0.32
-	mesh.height = 1.15
-	mesh_instance.mesh = mesh
-	mesh_instance.position.y = 0.58
-	mesh_instance.material_override = StorybookMaterialLibrary.make(
-		PaintPalette.get_color(color_id),
-		0.92
+	_team_ring.material_override = StorybookMaterialLibrary.make(
+		PaintPalette.get_color(color_id).lightened(0.18),
+		0.9,
+		false,
+		0.08
 	)
-	parent.add_child(mesh_instance)

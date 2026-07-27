@@ -12,7 +12,14 @@ const STREAMS: Dictionary = {
 	&"win": preload("res://assets/audio/sfx/win.ogg"),
 	&"draw": preload("res://assets/audio/sfx/draw.ogg"),
 }
-const MUSIC: AudioStream = preload("res://assets/audio/music/battle_loop.ogg")
+const MUSIC: AudioStream = preload(
+	"res://assets/audio/music/puddle_jumpers_loop.ogg"
+)
+const RAIN_THUNDER_AMBIENCE: AudioStream = preload(
+	"res://assets/audio/ambience/gentle_rain_thunder_loop.ogg"
+)
+const MUSIC_VOLUME_DB: float = -5.0
+const RAIN_THUNDER_VOLUME_DB: float = -19.0
 const SFX_VOLUME_OFFSETS_DB: Dictionary = {
 	&"start": -2.0,
 	&"appear": -1.0,
@@ -33,6 +40,7 @@ const SFX_PITCH_RANGES: Dictionary = {
 const SFX_POOL_SIZE: int = 12
 
 var _music_player: AudioStreamPlayer
+var _ambience_player: AudioStreamPlayer
 var _sfx_players: Array[AudioStreamPlayer] = []
 var _next_sfx_player: int = 0
 var _rng := RandomNumberGenerator.new()
@@ -44,11 +52,22 @@ func _ready() -> void:
 	if ogg_loop_stream != null:
 		ogg_loop_stream.loop = true
 	_music_player = AudioStreamPlayer.new()
+	_music_player.name = "BattleMusicPlayer"
 	_music_player.stream = MUSIC
-	_music_player.volume_db = -5.0
+	_music_player.volume_db = MUSIC_VOLUME_DB
 	_music_player.process_mode = Node.PROCESS_MODE_ALWAYS
 	_music_player.finished.connect(play_music)
 	add_child(_music_player)
+	var ambience_loop_stream := RAIN_THUNDER_AMBIENCE as AudioStreamOggVorbis
+	if ambience_loop_stream != null:
+		ambience_loop_stream.loop = true
+	_ambience_player = AudioStreamPlayer.new()
+	_ambience_player.name = "GentleRainThunderAmbiencePlayer"
+	_ambience_player.stream = RAIN_THUNDER_AMBIENCE
+	_ambience_player.volume_db = RAIN_THUNDER_VOLUME_DB
+	_ambience_player.process_mode = Node.PROCESS_MODE_ALWAYS
+	_ambience_player.finished.connect(_play_rain_thunder_ambience)
+	add_child(_ambience_player)
 	for _index: int in range(SFX_POOL_SIZE):
 		var player := AudioStreamPlayer.new()
 		player.process_mode = Node.PROCESS_MODE_ALWAYS
@@ -58,9 +77,20 @@ func _ready() -> void:
 func play_music() -> void:
 	if not _music_player.playing:
 		_music_player.play()
+	_play_rain_thunder_ambience()
 
 func stop_music() -> void:
 	_music_player.stop()
+	if is_instance_valid(_ambience_player):
+		_ambience_player.stop()
+
+
+func is_rain_thunder_ambience_playing() -> bool:
+	return is_instance_valid(_ambience_player) and _ambience_player.playing
+
+
+func get_rain_thunder_volume_db() -> float:
+	return RAIN_THUNDER_VOLUME_DB
 
 func stop_all() -> void:
 	stop_music()
@@ -94,6 +124,11 @@ func _acquire_sfx_player() -> AudioStreamPlayer:
 	_next_sfx_player = (_next_sfx_player + 1) % _sfx_players.size()
 	player.stop()
 	return player
+
+
+func _play_rain_thunder_ambience() -> void:
+	if is_instance_valid(_ambience_player) and not _ambience_player.playing:
+		_ambience_player.play()
 
 func _exit_tree() -> void:
 	stop_all()
