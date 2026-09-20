@@ -18,6 +18,7 @@ TEXT_ROOTS = (
 )
 TEXT_FILES = (
     ROOT / "project.godot",
+    ROOT / "assets/i18n/ui.csv",
 )
 TEXT_SUFFIXES = {".gd", ".tscn"}
 

@@ -1,8 +1,6 @@
 class_name CharacterPreview3D
 extends SubViewport
-## Orthographic lobby preview using the same production Sprite3D as battle.
-
-const STOP_MOTION_STEP := 1.0 / 8.0
+## Static orthographic IdleDown preview using the production battle Sprite3D.
 
 var definition: CharacterDefinition
 var color_id: String = PaintPalette.DEFAULT_PLAYER_COLOR_ID
@@ -10,8 +8,6 @@ var _sprite_set: CharacterSpriteSet
 var _character_sprite: Sprite3D
 var _visual_pivot: Node3D
 var _team_ring: MeshInstance3D
-var _animation_accumulator := 0.0
-var _animation_time := 0.0
 
 
 func setup(
@@ -24,7 +20,7 @@ func setup(
 	size = Vector2i(256, 192)
 	own_world_3d = true
 	transparent_bg = true
-	render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	render_target_update_mode = SubViewport.UPDATE_DISABLED
 	msaa_3d = Viewport.MSAA_DISABLED
 
 	var world := Node3D.new()
@@ -36,7 +32,7 @@ func setup(
 
 	_character_sprite = Sprite3D.new()
 	_character_sprite.name = "ImageGenPreviewSprite"
-	_character_sprite.texture = _sprite_set.texture_for(&"Idle")
+	_character_sprite.texture = _sprite_set.texture_for(&"Idle", 0, &"down")
 	_character_sprite.pixel_size = _sprite_set.pixel_size
 	_character_sprite.position.y = _sprite_set.ground_offset
 	StorybookMaterialLibrary.configure_billboard(_character_sprite)
@@ -62,17 +58,7 @@ func setup(
 	camera.look_at_from_position(Vector3(0.0, 0.68, 3.0), Vector3(0.0, 0.68, 0.0))
 	camera.current = true
 	world.add_child(camera)
-
-
-func _process(delta: float) -> void:
-	if not is_instance_valid(_visual_pivot):
-		return
-	_animation_accumulator += minf(delta, STOP_MOTION_STEP * 3.0)
-	while _animation_accumulator >= STOP_MOTION_STEP:
-		_animation_accumulator -= STOP_MOTION_STEP
-		_animation_time += STOP_MOTION_STEP
-		_visual_pivot.position.y = sin(_animation_time * 2.2) * 0.012
-		_visual_pivot.rotation.z = sin(_animation_time * 1.65) * 0.012
+	_request_static_render()
 
 
 func set_color_id(new_color_id: String) -> void:
@@ -81,13 +67,15 @@ func set_color_id(new_color_id: String) -> void:
 	color_id = new_color_id
 	_apply_palette()
 	_apply_ring_color()
+	_request_static_render()
 
 
 func _apply_palette() -> void:
 	if not is_instance_valid(_character_sprite) or _sprite_set == null:
 		return
-	var texture := _sprite_set.texture_for(&"Idle")
-	var mask := _sprite_set.mask_for(&"Idle")
+	var texture := _sprite_set.texture_for(&"Idle", 0, &"down")
+	var mask := _sprite_set.mask_for(&"Idle", 0, &"down")
+	_character_sprite.texture = texture
 	_character_sprite.material_override = StorybookMaterialLibrary.make_sprite_material(
 		texture,
 		mask,
@@ -104,3 +92,7 @@ func _apply_ring_color() -> void:
 		false,
 		0.08
 	)
+
+
+func _request_static_render() -> void:
+	render_target_update_mode = SubViewport.UPDATE_ONCE

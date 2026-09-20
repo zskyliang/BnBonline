@@ -6,6 +6,8 @@ run/max_fps=60
 
 [autoload]
 
+CrazyGamesBridge="*res://addons/crazygames/Utils/CrazyGamesBridge.gd"
+CrazyGames="*res://addons/crazygames/CrazyGames.gd"
 AudioManager="*res://scripts/audio_manager.gd"
 
 [display]
@@ -17,6 +19,10 @@ window/size/window_height_override=600
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
 window/vsync/vsync_mode=0
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/crazygames/plugin.cfg")
 
 [gui]
 

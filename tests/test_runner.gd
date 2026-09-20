@@ -420,6 +420,20 @@ func _test_actor_and_bubble_rules() -> void:
 			and is_equal_approx(trap_timer.wait_time, 10.0),
 		"bubble trap remains active for ten seconds"
 	)
+	_check(
+		GameRules.trap_bubble_touches(
+			player.position,
+			player.position + Vector2(GameConstants.CELL_SIZE, 0.0)
+		),
+		"visible trap-bubble edge accepts an opposing touch across a cell boundary"
+	)
+	_check(
+		not GameRules.trap_bubble_touches(
+			player.position,
+			player.position + Vector2(0.0, GameConstants.CELL_SIZE)
+		),
+		"trap-bubble touch follows its shallow oval instead of a broad square"
+	)
 	var death_result: Dictionary = {"team": PaintPalette.TEAM_NEUTRAL}
 	player.died.connect(func(_victim: GameActor, team: int, _attacker: GameActor) -> void:
 		death_result["team"] = team

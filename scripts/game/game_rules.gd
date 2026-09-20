@@ -6,6 +6,10 @@ const BODY_HALF_WIDTH: float = 11.5
 const BODY_TOP_OFFSET: float = -7.5
 const BODY_BOTTOM_OFFSET: float = 11.5
 const RIGID_CENTER_CLEARANCE: float = 20.0
+## The trapped-bubble artwork is wider than an actor's body. Touching its
+## visible outline should finish the trapped actor, even across a cell edge.
+const TRAP_TOUCH_HALF_WIDTH: float = 45.0
+const TRAP_TOUCH_HALF_HEIGHT: float = 36.0
 const BLAST_DIRECTIONS: Array[Vector2i] = [
 	Vector2i.RIGHT, Vector2i.LEFT, Vector2i.DOWN, Vector2i.UP,
 ]
@@ -55,3 +59,18 @@ static func body_cells(world_position: Vector2) -> Array[Vector2i]:
 static func both_feet_unsafe(world_position: Vector2, unsafe_cells: Dictionary) -> bool:
 	var feet: Array[Vector2i] = foot_cells(world_position)
 	return unsafe_cells.has(feet[0]) and unsafe_cells.has(feet[1])
+
+
+static func trap_bubble_touches(
+		trapped_position: Vector2,
+		toucher_position: Vector2
+	) -> bool:
+	var offset: Vector2 = (toucher_position - trapped_position).abs()
+	if offset.x > TRAP_TOUCH_HALF_WIDTH \
+			or offset.y > TRAP_TOUCH_HALF_HEIGHT:
+		return false
+	var normalized := Vector2(
+		offset.x / TRAP_TOUCH_HALF_WIDTH,
+		offset.y / TRAP_TOUCH_HALF_HEIGHT
+	)
+	return normalized.length_squared() <= 1.0

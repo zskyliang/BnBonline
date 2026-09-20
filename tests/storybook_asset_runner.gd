@@ -54,6 +54,7 @@ func _run() -> void:
 		_validate_wind_plant(plant_id)
 	for texture_path: String in SHARED_TEXTURE_PATHS:
 		_validate_shared_texture(texture_path)
+	_validate_trap_bubble()
 	_check(
 		not _directory_contains_extension("res://assets", "glb"),
 		"runtime assets contain no residual GLB files"
@@ -266,6 +267,71 @@ func _validate_shared_texture(path: String) -> void:
 		texture.get_width() <= 2048 and texture.get_height() <= 2048,
 		"%s stays within the 2048px scene-art budget" % path.get_file()
 	)
+
+
+func _validate_trap_bubble() -> void:
+	var texture := load(
+		"res://assets/art/storybook25d/effects/trap_bubble.png"
+	) as Texture2D
+	_check(texture != null, "trap bubble imports for enclosure validation")
+	if texture == null:
+		return
+	var image := texture.get_image()
+	_check(
+		image.get_size() == Vector2i(398, 297),
+		"trap bubble preserves its runtime anchor and scale"
+	)
+	_check(
+		_corners_are_transparent(image),
+		"trap bubble keeps transparent padding around the complete outline"
+	)
+	var visible_rect := _opaque_rect(image)
+	_check(
+		visible_rect.position.x >= 4 \
+			and visible_rect.position.y >= 4 \
+			and visible_rect.end.x <= image.get_width() - 4 \
+			and visible_rect.end.y <= image.get_height() - 4,
+		"trap bubble outline is fully inside the canvas"
+	)
+	var center := Vector2(visible_rect.position) \
+		+ Vector2(visible_rect.size - Vector2i.ONE) * 0.5
+	_check(
+		image.get_pixelv(Vector2i(center.round())).a <= 0.03,
+		"trap bubble center remains transparent for the enclosed character"
+	)
+	_check(
+		_ellipse_ring_is_closed(image, visible_rect),
+		"trap bubble has one continuous closed 360-degree outline"
+	)
+
+
+func _ellipse_ring_is_closed(image: Image, visible_rect: Rect2i) -> bool:
+	if image.is_empty() or not visible_rect.has_area():
+		return false
+	var center := Vector2(visible_rect.position) \
+		+ Vector2(visible_rect.size - Vector2i.ONE) * 0.5
+	var radii := Vector2(visible_rect.size) * 0.42
+	for sample_index: int in range(96):
+		var angle := TAU * float(sample_index) / 96.0
+		var sample := Vector2i(
+			(center + Vector2(cos(angle), sin(angle)) * radii).round()
+		)
+		var has_ring_pixel := false
+		for offset_y: int in range(-2, 3):
+			for offset_x: int in range(-2, 3):
+				var point := sample + Vector2i(offset_x, offset_y)
+				if point.x < 0 or point.y < 0 \
+						or point.x >= image.get_width() \
+						or point.y >= image.get_height():
+					continue
+				if image.get_pixelv(point).a > 0.1:
+					has_ring_pixel = true
+					break
+			if has_ring_pixel:
+				break
+		if not has_ring_pixel:
+			return false
+	return true
 
 
 func _corners_are_transparent(image: Image) -> bool:

@@ -15,7 +15,7 @@ func _run() -> void:
 	_test_storybook_material_constraints()
 	_test_audio_assets()
 	await _test_setup_character_radars()
-	await _test_lobby_pad_alignment()
+	await _test_static_lobby_wallpaper()
 	await _test_directional_character_sprite_views()
 	await _test_painted_board_view()
 	await _test_weather_and_ripples()
@@ -199,33 +199,45 @@ func _test_setup_character_radars() -> void:
 	await process_frame
 
 
-func _test_lobby_pad_alignment() -> void:
-	var lobby := StorybookLobbyDiorama3D.new()
-	lobby.size = Vector2i(1280, 720)
-	root.add_child(lobby)
+func _test_static_lobby_wallpaper() -> void:
+	var hud := GameHud.new()
+	root.add_child(hud)
 	await process_frame
-	var report := lobby.get_pad_alignment_report()
-	_check(report.size() == 8, "lobby places all eight animals on painted pads")
-	var anchors: Array[Vector3] = []
-	for entry: Dictionary in report:
-		var anchor := entry["feet_anchor"] as Vector3
-		var expected := entry["expected_anchor"] as Vector3
-		anchors.append(anchor)
-		_check(
-			anchor.is_equal_approx(expected),
-			"%s feet are locked to its background pad"
-				% str(entry["character_id"])
-		)
-		_check(
-			absf(anchor.x) <= 1.5 and anchor.y >= 1.55 and anchor.y <= 3.0,
-			"%s remains inside the eight-pad clearing"
-				% str(entry["character_id"])
-		)
-	var unique_anchors: Dictionary = {}
-	for anchor: Vector3 in anchors:
-		unique_anchors["%.2f,%.2f" % [anchor.x, anchor.y]] = true
-	_check(unique_anchors.size() == 8, "no two lobby animals share one pad")
-	lobby.queue_free()
+	var lobby_page := hud.find_child("LobbyPage", true, false) as Control
+	var wallpaper := hud.find_child(
+		"StaticLobbyWallpaper",
+		true,
+		false
+	) as TextureRect
+	_check(
+		is_instance_valid(wallpaper),
+		"lobby uses one direct static wallpaper"
+	)
+	_check(
+		is_instance_valid(wallpaper) \
+			and wallpaper.texture.get_width() == 1920 \
+			and wallpaper.texture.get_height() == 1080 \
+			and wallpaper.stretch_mode == TextureRect.STRETCH_KEEP_ASPECT_COVERED,
+		"static lobby wallpaper keeps the approved 1920x1080 cover composition"
+	)
+	_check(
+		is_instance_valid(lobby_page) \
+			and lobby_page.find_children(
+				"*",
+				"SubViewportContainer",
+				true,
+				false
+			).is_empty(),
+		"lobby no longer renders animated animal SubViewports"
+	)
+	var actions := hud.find_child("LobbyActions", true, false) as Control
+	_check(
+		is_instance_valid(actions) \
+			and is_equal_approx(actions.anchor_left, 1.0) \
+			and is_equal_approx(actions.anchor_bottom, 1.0),
+		"lobby actions stay in the lower-right clear area of the wallpaper"
+	)
+	hud.queue_free()
 	await process_frame
 
 
@@ -389,9 +401,22 @@ func _test_directional_character_sprite_views() -> void:
 	)
 	actor.stats.is_trapped = true
 	actor_view.call("_process", 0.13)
+	var trap_sprite := actor_view.find_child(
+		"TrapBubbleSprite",
+		true,
+		false
+	) as Sprite3D
 	_check(
 		actor_view.get_current_action() == &"Trapped",
 		"front-facing Trapped immediately overrides movement"
+	)
+	_check(
+		trap_sprite != null \
+			and trap_sprite.visible \
+			and trap_sprite.no_depth_test \
+			and trap_sprite.render_priority > 0 \
+			and trap_sprite.get_parent().name == "TrapBubblePivot",
+		"trap bubble renders complete in an independent foreground layer"
 	)
 	actor.stats.is_trapped = false
 	actor.stats.is_dead = true
@@ -405,13 +430,43 @@ func _test_directional_character_sprite_views() -> void:
 	preview.setup(CharacterCatalog.get_definition("cat"), "red")
 	await process_frame
 	preview.set_color_id("cyan")
+	await process_frame
 	var preview_sprite := preview.find_child(
 		"ImageGenPreviewSprite",
 		true,
 		false
 	) as Sprite3D
+	var preview_pivot := preview.find_child(
+		"PreviewPaperPuppet",
+		true,
+		false
+	) as Node3D
+	var static_position := (
+		preview_pivot.position
+		if is_instance_valid(preview_pivot)
+		else Vector3.ZERO
+	)
+	var static_rotation := (
+		preview_pivot.rotation
+		if is_instance_valid(preview_pivot)
+		else Vector3.ZERO
+	)
+	await process_frame
+	await process_frame
 	_check(preview_sprite != null, "lobby preview reuses the production Sprite3D")
 	_check(preview.color_id == "cyan", "preview updates its selected team color")
+	_check(
+		is_instance_valid(preview_sprite) \
+			and preview_sprite.texture.resource_path.ends_with("idle_down.png"),
+		"character selection uses the sharp IdleDown first frame"
+	)
+	_check(
+		is_instance_valid(preview_pivot) \
+			and preview_pivot.position.is_equal_approx(static_position) \
+			and preview_pivot.rotation.is_equal_approx(static_rotation) \
+			and preview.render_target_update_mode != SubViewport.UPDATE_ALWAYS,
+		"character selection preview remains completely static"
+	)
 	preview.queue_free()
 	actor_view.queue_free()
 	actor.queue_free()

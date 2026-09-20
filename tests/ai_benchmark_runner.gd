@@ -218,6 +218,7 @@ func _run() -> void:
 	_reset_neutral_paint(match_node.board)
 	var player := match_node.get_player()
 	player.respawn(Vector2i(7, 6))
+	player.position += Vector2.ONE * GameConstants.CELL_SIZE * 0.47
 	player.stats.invincible_until_ms = 0
 	ai_actor.respawn(Vector2i(5, 6))
 	ai_actor.stats.invincible_until_ms = 0
@@ -235,7 +236,7 @@ func _run() -> void:
 			break
 	_check(
 		player.stats.is_dead and player.was_finished_by_enemy_touch,
-		"AI reaches and touches the trapped player before the ten-second release"
+		"AI touches an off-center trapped player instead of stopping at the target cell center"
 	)
 	var trapped_defeat_counts := match_node.board.get_territory_counts()
 	_check(

@@ -25,6 +25,7 @@ var _world: Node2D
 var _entity_root: Node2D
 var _effect_root: Node2D
 var _arena_view: ArenaView3D
+var _web_adapter: WebPlatformAdapter
 var _actors: Array[GameActor] = []
 var _ai_controllers: Array[RuleAI] = []
 var _active_explosions: Array[ExplosionEffect] = []
@@ -51,6 +52,7 @@ var _ai_hazard_revision: int = 0
 var _cached_ai_hazard_revision: int = -1
 var _current_ai_character_ids: Array[String] = []
 var _last_round_won: bool = false
+var _had_persisted_settings: bool = false
 var ai_profile: AIBehaviorProfile = DEFAULT_AI_PROFILE.duplicate(true) as AIBehaviorProfile
 
 const AI_FORECAST_CACHE_MS: int = 60
@@ -59,14 +61,16 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_rng.randomize()
 	_ensure_input_actions()
+	_had_persisted_settings = MatchSettings.has_persisted_preferences()
 	settings = MatchSettings.load_from_disk()
 	TranslationServer.set_locale(settings.language_code)
 	DisplayServer.window_set_title(tr("森林泡泡染色战"))
 	run_progress = RunProgress.new()
 	_build_scene_tree()
-	var web_adapter := WebPlatformAdapter.new()
-	web_adapter.name = "WebPlatformAdapter"
-	add_child(web_adapter)
+	_web_adapter = WebPlatformAdapter.new()
+	_web_adapter.name = "WebPlatformAdapter"
+	_web_adapter.locale_detected.connect(_on_platform_locale_detected)
+	add_child(_web_adapter)
 	_connect_hud()
 	hud.sync_settings(settings)
 	if DisplayServer.get_name() == "headless":
@@ -99,6 +103,8 @@ func _process(_delta: float) -> void:
 		hud.update_fps(fps)
 		_fps_label.text = "FPS: %d" % fps
 		hud.update_player_stats(_player)
+	if is_instance_valid(_web_adapter):
+		_web_adapter.update_game_state(_build_web_game_state())
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause_game") and not _round_over:
@@ -164,10 +170,14 @@ func start_match(
 	_update_scoreboard()
 	stage_changed.emit(run_progress.stage_number)
 	_audio_call(&"play_sfx", [&"start"])
-	_audio_call(&"play_music")
+	_audio_call(&"play_battle_music")
+	if is_instance_valid(_web_adapter):
+		_web_adapter.request_gameplay_start()
 
 
 func _enter_lobby() -> void:
+	if is_instance_valid(_web_adapter):
+		_web_adapter.request_gameplay_stop()
 	get_tree().paused = false
 	_round_over = true
 	_is_paused = false
@@ -177,21 +187,29 @@ func _enter_lobby() -> void:
 	run_progress = RunProgress.new()
 	_arena_view.visible = false
 	hud.show_lobby()
-	_audio_call(&"stop_music")
+	_audio_call(&"play_menu_music")
 
 
 func _enter_setup() -> void:
+	if is_instance_valid(_web_adapter):
+		_web_adapter.request_gameplay_stop()
 	get_tree().paused = false
 	_round_over = true
 	_is_paused = false
 	app_state = AppState.SETUP
 	_arena_view.visible = false
 	hud.show_setup(settings)
+	_audio_call(&"play_menu_music")
 
 
 func _on_match_requested(configuration: Dictionary) -> void:
 	settings.apply_dictionary(configuration)
 	settings.save_to_disk()
+	_begin_new_run()
+	start_match(settings)
+
+
+func _start_quick_match() -> void:
 	_begin_new_run()
 	start_match(settings)
 
@@ -203,6 +221,8 @@ func _begin_new_run() -> void:
 
 
 func _quit_game() -> void:
+	if is_instance_valid(_web_adapter):
+		_web_adapter.request_gameplay_stop()
 	get_tree().quit()
 
 func danger_eta_ms(cell: Vector2i) -> int:
@@ -378,6 +398,7 @@ func _build_scene_tree() -> void:
 
 func _connect_hud() -> void:
 	hud.setup_requested.connect(_enter_setup)
+	hud.quick_match_requested.connect(_start_quick_match)
 	hud.match_requested.connect(_on_match_requested)
 	hud.resume_requested.connect(_resume_match)
 	hud.restart_requested.connect(start_match)
@@ -626,17 +647,17 @@ func _resolve_actor_contacts() -> void:
 			var right: GameActor = _actors[right_index]
 			if not is_instance_valid(right) or right.stats.is_dead:
 				continue
-			if left.position.distance_to(right.position) > 24.0:
-				continue
 			_resolve_touch_pair(left, right)
 
 func _resolve_touch_pair(left: GameActor, right: GameActor) -> void:
 	if left.team_id == right.team_id:
 		return
 	if left.stats.is_trapped and not right.stats.is_trapped:
-		left.finish_by_touch(right)
+		if GameRules.trap_bubble_touches(left.position, right.position):
+			left.finish_by_touch(right)
 	elif right.stats.is_trapped and not left.stats.is_trapped:
-		right.finish_by_touch(left)
+		if GameRules.trap_bubble_touches(right.position, left.position):
+			right.finish_by_touch(left)
 
 func _on_actor_died(victim: GameActor, defeating_team: int, attacker: GameActor) -> void:
 	_audio_call(&"play_sfx", [&"die"])
@@ -746,6 +767,8 @@ func _end_round() -> void:
 	_round_over = true
 	_is_paused = true
 	app_state = AppState.RESULT
+	if is_instance_valid(_web_adapter):
+		_web_adapter.request_gameplay_stop()
 	_audio_call(&"stop_music")
 	var counts: Dictionary = board.get_territory_counts()
 	var player_cells: int = int(counts.get("player", 0))
@@ -810,10 +833,12 @@ func _team_color_id(team_id: int) -> String:
 		else run_progress.ai_color_id
 	)
 
-func _pause_match() -> void:
+func _pause_match(report_gameplay: bool = true) -> void:
 	_is_paused = true
 	hud.show_pause()
 	get_tree().paused = true
+	if report_gameplay and is_instance_valid(_web_adapter):
+		_web_adapter.request_gameplay_stop()
 
 func _resume_match() -> void:
 	if _round_over:
@@ -821,6 +846,8 @@ func _resume_match() -> void:
 	get_tree().paused = false
 	_is_paused = false
 	hud.hide_pause()
+	if is_instance_valid(_web_adapter):
+		_web_adapter.request_gameplay_start()
 
 
 func _open_settings() -> void:
@@ -830,6 +857,8 @@ func _open_settings() -> void:
 	if app_state == AppState.MATCH and not _round_over:
 		_is_paused = true
 		get_tree().paused = true
+		if is_instance_valid(_web_adapter):
+			_web_adapter.request_gameplay_stop()
 
 
 func _close_settings() -> void:
@@ -838,9 +867,12 @@ func _close_settings() -> void:
 		return
 	get_tree().paused = false
 	_is_paused = false
+	if is_instance_valid(_web_adapter):
+		_web_adapter.request_gameplay_start()
 
 
 func _on_language_changed(language_code: String) -> void:
+	_had_persisted_settings = true
 	settings.language_code = language_code
 	settings.normalize()
 	TranslationServer.set_locale(settings.language_code)
@@ -849,6 +881,60 @@ func _on_language_changed(language_code: String) -> void:
 	hud.sync_settings(settings)
 	hud.refresh_localized_text(run_progress, _player)
 	_update_scoreboard()
+
+
+func _on_platform_locale_detected(language_code: String) -> void:
+	if _had_persisted_settings:
+		return
+	_on_language_changed(language_code)
+
+
+func _build_web_game_state() -> Dictionary:
+	var mode_names: Array[String] = ["lobby", "setup", "match", "result"]
+	var counts: Dictionary = (
+		board.get_territory_counts()
+		if is_instance_valid(board)
+		else {}
+	)
+	var player_cell := Vector2i(-1, -1)
+	if is_instance_valid(_player):
+		player_cell = _player.current_cell()
+	return {
+		"mode": mode_names[app_state],
+		"paused": _is_paused,
+		"stage": run_progress.stage_number if run_progress != null else 1,
+		"time_remaining_seconds": ceili(_remaining_seconds),
+		"performance": {
+			"fps": Engine.get_frames_per_second(),
+			"process_ms": snappedf(
+				Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0,
+				0.01
+			),
+			"physics_ms": snappedf(
+				Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0,
+				0.01
+			),
+			"draw_calls": roundi(
+				Performance.get_monitor(
+					Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME
+				)
+			),
+			"objects": roundi(
+				Performance.get_monitor(
+					Performance.RENDER_TOTAL_OBJECTS_IN_FRAME
+				)
+			),
+		},
+		"player": {"cell": {"x": player_cell.x, "y": player_cell.y}},
+		"territory": {
+			"player": int(counts.get("player", 0)),
+			"ai": int(counts.get("ai", 0)),
+			"player_locked": int(counts.get("player_locked", 0)),
+			"ai_locked": int(counts.get("ai_locked", 0)),
+		},
+		"coordinate_system": "board cells; origin top-left; +x right; +y down",
+		"controls": "WASD/arrows move; Space places bubble; Esc pauses",
+	}
 
 func _ensure_input_actions() -> void:
 	_register_action(&"move_left", [KEY_LEFT, KEY_A])

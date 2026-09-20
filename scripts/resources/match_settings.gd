@@ -62,6 +62,22 @@ func save_to_disk() -> void:
 		push_warning("Unable to save settings: %s" % error_string(error))
 
 
+static func has_persisted_preferences() -> bool:
+	if OS.has_feature("web"):
+		var storage: JavaScriptObject = JavaScriptBridge.get_interface("localStorage")
+		if storage == null:
+			return false
+		var raw_value: Variant = storage.getItem(WEB_STORAGE_KEY)
+		if raw_value != null and not str(raw_value).is_empty():
+			return true
+		for legacy_key: String in LEGACY_WEB_STORAGE_KEYS:
+			raw_value = storage.getItem(legacy_key)
+			if raw_value != null and not str(raw_value).is_empty():
+				return true
+		return false
+	return FileAccess.file_exists(SAVE_PATH)
+
+
 static func load_from_disk() -> MatchSettings:
 	var settings := MatchSettings.new()
 	if OS.has_feature("web"):

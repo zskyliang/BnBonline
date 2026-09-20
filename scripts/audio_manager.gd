@@ -12,13 +12,17 @@ const STREAMS: Dictionary = {
 	&"win": preload("res://assets/audio/sfx/win.ogg"),
 	&"draw": preload("res://assets/audio/sfx/draw.ogg"),
 }
-const MUSIC: AudioStream = preload(
+const MENU_MUSIC: AudioStream = preload(
+	"res://assets/audio/music/tiptoe_through_the_ferns.mp3"
+)
+const BATTLE_MUSIC: AudioStream = preload(
 	"res://assets/audio/music/puddle_jumpers_loop.ogg"
 )
 const RAIN_THUNDER_AMBIENCE: AudioStream = preload(
 	"res://assets/audio/ambience/gentle_rain_thunder_loop.ogg"
 )
-const MUSIC_VOLUME_DB: float = -5.0
+const MENU_MUSIC_VOLUME_DB: float = -5.0
+const BATTLE_MUSIC_VOLUME_DB: float = -5.0
 const RAIN_THUNDER_VOLUME_DB: float = -19.0
 const SFX_VOLUME_OFFSETS_DB: Dictionary = {
 	&"start": -2.0,
@@ -48,15 +52,16 @@ var _rng := RandomNumberGenerator.new()
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_rng.randomize()
-	var ogg_loop_stream := MUSIC as AudioStreamOggVorbis
-	if ogg_loop_stream != null:
-		ogg_loop_stream.loop = true
+	var menu_loop_stream := MENU_MUSIC as AudioStreamMP3
+	if menu_loop_stream != null:
+		menu_loop_stream.loop = true
+	var battle_loop_stream := BATTLE_MUSIC as AudioStreamOggVorbis
+	if battle_loop_stream != null:
+		battle_loop_stream.loop = true
 	_music_player = AudioStreamPlayer.new()
-	_music_player.name = "BattleMusicPlayer"
-	_music_player.stream = MUSIC
-	_music_player.volume_db = MUSIC_VOLUME_DB
+	_music_player.name = "MusicPlayer"
 	_music_player.process_mode = Node.PROCESS_MODE_ALWAYS
-	_music_player.finished.connect(play_music)
+	_music_player.finished.connect(_restart_current_music)
 	add_child(_music_player)
 	var ambience_loop_stream := RAIN_THUNDER_AMBIENCE as AudioStreamOggVorbis
 	if ambience_loop_stream != null:
@@ -74,10 +79,21 @@ func _ready() -> void:
 		add_child(player)
 		_sfx_players.append(player)
 
-func play_music() -> void:
-	if not _music_player.playing:
-		_music_player.play()
+func play_menu_music() -> void:
+	if is_instance_valid(_ambience_player):
+		_ambience_player.stop()
+	_play_music_stream(MENU_MUSIC, MENU_MUSIC_VOLUME_DB)
+
+
+func play_battle_music() -> void:
+	_play_music_stream(BATTLE_MUSIC, BATTLE_MUSIC_VOLUME_DB)
 	_play_rain_thunder_ambience()
+
+
+## Backward-compatible battle-music entry point used by visual test helpers.
+func play_music() -> void:
+	play_battle_music()
+
 
 func stop_music() -> void:
 	_music_player.stop()
@@ -124,6 +140,25 @@ func _acquire_sfx_player() -> AudioStreamPlayer:
 	_next_sfx_player = (_next_sfx_player + 1) % _sfx_players.size()
 	player.stop()
 	return player
+
+
+func _play_music_stream(stream: AudioStream, volume_db: float) -> void:
+	if _music_player.stream == stream:
+		_music_player.volume_db = volume_db
+		if not _music_player.playing:
+			_music_player.play()
+		return
+	_music_player.stop()
+	_music_player.stream = stream
+	_music_player.volume_db = volume_db
+	_music_player.play()
+
+
+func _restart_current_music() -> void:
+	if is_instance_valid(_music_player) \
+			and _music_player.stream != null \
+			and not _music_player.playing:
+		_music_player.play()
 
 
 func _play_rain_thunder_ambience() -> void:

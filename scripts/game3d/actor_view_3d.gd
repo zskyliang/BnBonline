@@ -11,6 +11,8 @@ const SIZE_REFERENCE_CHARACTER_ID := "dog"
 const TARGET_IDLE_CELL_WIDTH := 1.0
 const FOOT_CLEARANCE := 0.025
 const MIN_TRAP_PIXEL_SIZE := 0.00415
+const TRAP_VERTICAL_LIFT := 0.22
+const TRAP_RENDER_PRIORITY := 8
 const FRAME_HEIGHT_NORMALIZED_CHARACTER_ID := "penguin"
 const FRAME_HEIGHT_NORMALIZED_ACTION := &"WalkUp"
 
@@ -22,6 +24,7 @@ var _sprite_set: CharacterSpriteSet
 var _visual_pivot: Node3D
 var _character_sprite: Sprite3D
 var _character_material: ShaderMaterial
+var _trap_pivot: Node3D
 var _trap_sprite: Sprite3D
 var _team_ring: MeshInstance3D
 var _contact_shadow: MeshInstance3D
@@ -223,6 +226,9 @@ func _build_visual() -> void:
 	StorybookMaterialLibrary.configure_billboard(_character_sprite)
 	_visual_pivot.add_child(_character_sprite)
 
+	_trap_pivot = Node3D.new()
+	_trap_pivot.name = "TrapBubblePivot"
+	add_child(_trap_pivot)
 	_trap_sprite = Sprite3D.new()
 	_trap_sprite.name = "TrapBubbleSprite"
 	var trap_texture := load(
@@ -239,13 +245,15 @@ func _build_visual() -> void:
 		_grounded_center_height(
 			trap_texture,
 			_trap_sprite.pixel_size
-		),
-		-0.015
+		) + TRAP_VERTICAL_LIFT,
+		0.0
 	)
 	_trap_sprite.modulate = Color(1.0, 1.0, 1.0, 0.82)
 	StorybookMaterialLibrary.configure_billboard(_trap_sprite, true)
+	_trap_sprite.no_depth_test = true
+	_trap_sprite.render_priority = TRAP_RENDER_PRIORITY
 	_trap_sprite.visible = false
-	_visual_pivot.add_child(_trap_sprite)
+	_trap_pivot.add_child(_trap_sprite)
 	_set_action(&"Idle", true)
 
 

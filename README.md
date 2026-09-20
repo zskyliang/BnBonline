@@ -57,11 +57,19 @@ godot --headless --path . --script res://tests/ai_item_training_runner.gd -- --m
 godot --headless --path . --script res://tests/ai_stress_runner.gd -- --mute
 ```
 
-Web Release：
+CrazyGames 发布包：
 
 ```bash
-godot --headless --path . --export-release Web build/web/index.html
+./tools/package_crazygames.sh
 ```
+
+脚本会重新导入资源，依次执行规则、资源、视觉和完整 Smoke Test，再导出
+Godot Web Release、检查 CrazyGames 的文件数量和包体限制，并生成
+`build/crazygames-upload.zip`。任何检查失败都会立即停止，不覆盖上一次成功
+的发布包。平台配置、英文商店文案、素材规格及提交检查表见
+[docs/CRAZYGAMES_RELEASE.md](docs/CRAZYGAMES_RELEASE.md)。
+已生成的三张封面、两支 Preview Video 和制作记录见
+[marketing/crazygames/README.md](marketing/crazygames/README.md)。
 
 ## 结构
 

@@ -1,5 +1,57 @@
 Original prompt: Implement the “BnBonline 等距海岛与水泡特效重制” plan while keeping all game rules and AI behavior unchanged.
 
+Current prompt (2026-07-27): Prepare the current game for CrazyGames, implement the required changes, and document the remaining submission work.
+
+## 2026-07-27 — CrazyGames adaptation
+
+- Regenerated the trapped-character bubble as a complete closed watercolor
+  oval with transparent center and canvas padding, lifted its foreground layer
+  so the full head and feet remain enclosed, verified it around the actual
+  in-match capybara render, and added a 360-degree alpha-ring continuity
+  regression check.
+- Unified the native and Web in-game lobby on the approved 1920x1080 static
+  cover artwork, removed the separate title panel and animated eight-animal
+  SubViewport diorama, and moved the interactive actions into the lower-right
+  clear area. Character-selection cards now render the explicit IdleDown first
+  frame once, without bobbing or rotation.
+- Generated a consistent three-cover ImageGen set (landscape, portrait and
+  square) based on the real lobby and gameplay, then applied the exact English
+  game title with the project OFL font at the mandatory upload sizes.
+- Recorded a real scripted playthrough with normal-speed movement and bubble
+  placement, then produced 18.03-second silent 60 FPS H.264 landscape and
+  portrait previews. Both open on their matching cover; the portrait version
+  uses a full-bleed central gameplay crop instead of the unattractive empty
+  space from the native portrait canvas.
+- Replaced the misleading SwiftShader/25 FPS Playwright recording path with
+  hardware-Chrome canvas capture, exposed 250 ms Web performance snapshots,
+  and removed recursive state copying. The final 1920x1080 ZIP runs at 60 FPS
+  on Apple M3 Pro / Metal and 59 FPS with 4x browser CPU throttling while also
+  recording.
+- Vendored the official CrazyGames Godot SDK v1.0.2 and enabled its Godot 4
+  autoloads/plugin.
+- Added queued/idempotent CrazyGames `gameplayStart`/`gameplayStop` reporting
+  for match, pause, settings, result, setup and lobby transitions.
+- Added platform `muteAudio` handling (including live settings changes), SDK
+  locale detection with persisted user-choice precedence, browser focus mute,
+  responsive canvas/input guards, and a browser-readable game-state probe.
+- Changed the Web lobby to allow one-click gameplay while preserving a
+  separate character/team configuration route.
+- Renamed the release preset to `CrazyGames`, kept Compatibility rendering and
+  threads disabled, and expanded editor/source exclusions.
+- Switched the 168 colored character textures to Web lossy compression while
+  keeping their masks lossless, rebuilt the runtime font subset from both code
+  and the localization CSV, and removed the missing multiplication/dash glyphs.
+- Added a deterministic packaging script that validates the upload limits and
+  creates `build/crazygames-upload.zip`. The latest verified package contains
+  9 files, is 65.47 MiB raw / about 37 MiB zipped, and has a 36.06 MiB
+  estimated gzip transfer size.
+- Verified the SDK lifecycle and platform mute behavior in a real browser, plus
+  120 rules checks, 1513 asset checks, 205 visual structure checks and the full
+  smoke flow.
+- Added a Chinese release runbook with portal settings, copy-ready English
+  metadata, mandatory cover/video specifications and the post-Basic-Launch
+  monetization/data/mobile roadmap.
+
 ## 2026-07-26
 
 - Added capacity-pressure paint utility and safe current-cell barrage chaining;

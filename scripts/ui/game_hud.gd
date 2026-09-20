@@ -3,8 +3,12 @@ extends Control
 ## Responsive UI for paint-campaign setup, match HUD, pause, and progression.
 
 const STORYBOOK_UI_ROOT := "res://assets/art/storybook25d/ui/"
+const LOBBY_WALLPAPER: Texture2D = preload(
+	"res://assets/art/storybook25d/lobby/storybook_lobby.png"
+)
 
 signal setup_requested
+signal quick_match_requested
 signal match_requested(configuration: Dictionary)
 signal resume_requested
 signal restart_requested
@@ -303,41 +307,25 @@ func _build_lobby() -> void:
 	_lobby_page.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(_lobby_page)
 	_add_background(_lobby_page, true)
-	var header_panel := PanelContainer.new()
-	header_panel.set_anchors_preset(Control.PRESET_CENTER_TOP)
-	header_panel.position = Vector2(-340, 18)
-	header_panel.size = Vector2(680, 154)
-	header_panel.add_theme_stylebox_override(
-		"panel",
-		_storybook_panel_style()
-	)
-	_lobby_page.add_child(header_panel)
-	var header := VBoxContainer.new()
-	header.alignment = BoxContainer.ALIGNMENT_CENTER
-	header.add_theme_constant_override("separation", 2)
-	header_panel.add_child(header)
-	var seal := _make_label("森林绘本 · 无限闯关", 20, Color("#6b4938"))
-	seal.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	header.add_child(seal)
-	var title := _make_label("森林泡泡染色战", 46, Color("#7d3e36"))
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_constant_override("outline_size", 3)
-	title.add_theme_color_override("font_outline_color", Color("#fff8e8"))
-	header.add_child(title)
-	var subtitle := _make_label("两分钟抢占地板，撞破敌方困泡永久锁定九宫格", 18, Color("#35585b"))
-	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	header.add_child(subtitle)
 
 	var actions := VBoxContainer.new()
-	actions.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	actions.name = "LobbyActions"
+	actions.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
 	actions.position = Vector2(-300, -196)
-	actions.size = Vector2(600, 178)
+	actions.size = Vector2(270, 178)
 	actions.alignment = BoxContainer.ALIGNMENT_END
 	actions.add_theme_constant_override("separation", 10)
 	_lobby_page.add_child(actions)
 	var start := _make_button("开始闯关", Color("#ef6b5b"), Vector2(280, 56))
-	start.pressed.connect(setup_requested.emit)
+	if OS.has_feature("web"):
+		start.pressed.connect(quick_match_requested.emit)
+	else:
+		start.pressed.connect(setup_requested.emit)
 	actions.add_child(start)
+	if OS.has_feature("web"):
+		var setup := _make_button("角色与阵营", Color("#4d9d9a"), Vector2(220, 44))
+		setup.pressed.connect(setup_requested.emit)
+		actions.add_child(setup)
 	var settings_button := _make_button("设置", Color("#e6a94c"), Vector2(220, 44))
 	settings_button.name = "LobbySettingsButton"
 	settings_button.pressed.connect(settings_open_requested.emit)
@@ -856,16 +844,19 @@ func _fill_score_box(box: VBoxContainer, entries: Array[Dictionary]) -> void:
 
 func _add_background(parent: Control, use_art: bool) -> void:
 	if use_art:
-		var viewport_container := SubViewportContainer.new()
-		viewport_container.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		viewport_container.stretch = true
-		viewport_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		parent.add_child(viewport_container)
-		var diorama := StorybookLobbyDiorama3D.new()
-		viewport_container.add_child(diorama)
+		var wallpaper := TextureRect.new()
+		wallpaper.name = "StaticLobbyWallpaper"
+		wallpaper.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		wallpaper.texture = LOBBY_WALLPAPER
+		wallpaper.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		wallpaper.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		wallpaper.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+		wallpaper.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		parent.add_child(wallpaper)
+		return
 	var tint := ColorRect.new()
 	tint.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	tint.color = Color(0.96, 0.9, 0.78, 0.08) if use_art else StorybookMaterialLibrary.SKY
+	tint.color = StorybookMaterialLibrary.SKY
 	tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	parent.add_child(tint)
 
